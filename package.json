@@ -1,0 +1,13 @@
+{
+  "name": "spotify-rules-server",
+  "version": "1.0.0",
+  "description": "24/7 Spotify Rules monitoring server",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "better-sqlite3": "^11.7.0"
+  }
+}

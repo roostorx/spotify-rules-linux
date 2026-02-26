@@ -1,0 +1,887 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Spotify Rules</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{min-height:100vh;background:linear-gradient(160deg,#0a0a0a 0%,#111 40%,#0d1a0f 100%);font-family:'DM Sans','Helvetica Neue',sans-serif;color:#fff}
+    input,button{font-family:inherit}
+    a{color:#1DB954}
+    ::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.1);border-radius:3px}
+    .mono{font-family:'JetBrains Mono',monospace}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+    .pulse{animation:pulse 2s infinite}
+    .card{background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:16px;padding:24px}
+    .input{width:100%;padding:12px 16px;border-radius:10px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.06);color:#fff;font-size:14px;outline:none}
+    .input:focus{border-color:rgba(29,185,84,0.5)}
+    .btn{padding:12px 24px;border-radius:50px;border:none;font-size:14px;font-weight:700;cursor:pointer;transition:all 0.2s;font-family:inherit}
+    .btn-green{background:#1DB954;color:#000}.btn-green:hover{background:#1ed760}
+    .btn-dim{background:rgba(255,255,255,0.08);color:rgba(255,255,255,0.3);cursor:default}
+    .btn-outline{background:transparent;border:1px solid rgba(255,255,255,0.15);color:rgba(255,255,255,0.6)}
+    .btn-outline:hover{border-color:rgba(255,255,255,0.3)}
+    .btn-sm{padding:8px 16px;font-size:12px;border-radius:8px}
+    .label{display:block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:rgba(255,255,255,0.4);margin-bottom:8px}
+    .dim{color:rgba(255,255,255,0.45);font-size:13px;line-height:1.7}
+    .green{color:#1DB954}
+    .track{display:flex;align-items:center;gap:12px;padding:10px 14px;border-radius:10px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.04);cursor:pointer;transition:all 0.15s}
+    .track:hover{background:rgba(255,255,255,0.08)}
+    .track img{width:40px;height:40px;border-radius:6px;object-fit:cover;flex-shrink:0}
+    .track .name{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .track .meta{font-size:11px;color:rgba(255,255,255,0.5);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .track .action{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:rgba(255,255,255,0.3);flex-shrink:0}
+  </style>
+</head>
+<body>
+
+<div id="login-view" style="display:none">
+  <div style="display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px">
+    <div style="max-width:480px;width:100%">
+      <div style="text-align:center;margin-bottom:36px">
+        <div style="font-size:48px;margin-bottom:8px">⚡</div>
+        <h1 style="font-size:32px;font-weight:800;margin:0 0 8px;letter-spacing:-0.02em">Spotify <span class="green">Rules</span></h1>
+        <p class="dim" style="font-size:15px">24/7 monitoring · SQLite persistence · play songs after triggers</p>
+      </div>
+      <div class="card">
+        <span class="label">Spotify Client ID</span>
+        <p class="dim" style="margin-bottom:16px">
+          Go to <a href="https://developer.spotify.com/dashboard" target="_blank">developer.spotify.com/dashboard</a>,
+          create an app with redirect URI:
+        </p>
+        <div id="redirect-uri-display" onclick="copyRedirectUri()"
+             class="mono" style="padding:10px 14px;border-radius:8px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);margin-bottom:4px;font-size:13px;color:#1DB954;cursor:pointer;word-break:break-all">
+          <span id="redirect-uri-text"></span>
+          <span id="copy-hint" style="float:right;font-size:11px;color:rgba(255,255,255,0.3)">click to copy</span>
+        </div>
+        <div style="padding:8px 12px;border-radius:6px;background:rgba(255,185,29,0.06);border:1px solid rgba(255,185,29,0.12);font-size:11px;color:rgba(255,185,29,0.65);line-height:1.5;margin-bottom:16px">
+          ⚠️ Must use <strong>127.0.0.1</strong> or your server's IP — Spotify doesn't allow "localhost"
+        </div>
+        <p class="dim" style="margin-bottom:12px">Paste your <strong style="color:#fff">Client ID</strong>:</p>
+        <input id="cid-input" type="text" class="input mono" placeholder="e.g. 1a2b3c4d5e6f..." style="margin-bottom:14px" />
+        <div id="login-error" style="color:#ff5050;font-size:12px;margin-bottom:12px;display:none"></div>
+        <button id="login-btn" class="btn btn-dim" style="width:100%">Connect with Spotify</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="dashboard-view" style="display:none">
+  <header style="padding:16px 24px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,0.06);position:sticky;top:0;z-index:100;background:rgba(10,10,10,0.85);backdrop-filter:blur(20px)">
+    <div style="display:flex;align-items:center;gap:12px">
+      <span style="font-size:22px">⚡</span>
+      <span style="font-size:18px;font-weight:800;letter-spacing:-0.02em">Spotify <span class="green">Rules</span></span>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px">
+      <div id="status-badge" style="display:flex;align-items:center;gap:6px;padding:6px 14px;border-radius:20px;background:rgba(29,185,84,0.1);border:1px solid rgba(29,185,84,0.2)">
+        <span id="status-dot" style="width:8px;height:8px;border-radius:50%;background:#1DB954" class="pulse"></span>
+        <span id="status-text" style="font-size:12px;font-weight:600;color:#1DB954">Monitoring</span>
+      </div>
+      <span id="user-name" style="font-size:13px;color:rgba(255,255,255,0.4)"></span>
+      <button onclick="doLogout()" class="btn btn-outline btn-sm">Logout</button>
+    </div>
+  </header>
+
+  <!-- Tab Navigation -->
+  <div style="max-width:720px;margin:0 auto;padding:16px 20px 0">
+    <div style="display:flex;gap:4px;border-bottom:1px solid rgba(255,255,255,0.06);margin-bottom:0">
+      <button onclick="switchTab('rules')" id="tab-rules" class="tab-btn tab-active" style="padding:10px 20px;border:none;background:none;color:#1DB954;font-size:14px;font-weight:700;cursor:pointer;border-bottom:2px solid #1DB954;font-family:inherit;margin-bottom:-1px">⚡ Rules</button>
+      <button onclick="switchTab('library')" id="tab-library" class="tab-btn" style="padding:10px 20px;border:none;background:none;color:rgba(255,255,255,0.4);font-size:14px;font-weight:700;cursor:pointer;border-bottom:2px solid transparent;font-family:inherit;margin-bottom:-1px">📚 Library</button>
+    </div>
+  </div>
+
+  <!-- RULES TAB -->
+  <div id="tab-content-rules" style="max-width:720px;margin:0 auto;padding:24px 20px">
+    <!-- Now Playing -->
+    <div id="now-playing" class="card" style="margin-bottom:24px"></div>
+
+    <!-- Rules -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+      <h2 style="font-size:20px;font-weight:800">Rules <span id="rule-count" style="font-size:14px;font-weight:500;color:rgba(255,255,255,0.3);margin-left:8px">0</span></h2>
+      <button id="new-rule-btn" onclick="startBuild()" class="btn btn-sm" style="background:rgba(29,185,84,0.15);color:#1DB954;border:none">+ New Rule</button>
+    </div>
+
+    <div id="builder" style="display:none;margin-bottom:20px"></div>
+    <div id="rules-list"></div>
+
+    <!-- Log -->
+    <div id="log-section" style="display:none;margin-top:32px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <h3 style="font-size:15px;font-weight:700;color:rgba(255,255,255,0.6)">Activity</h3>
+        <button onclick="logs=[];renderLog()" style="background:none;border:none;color:rgba(255,255,255,0.25);font-size:12px;cursor:pointer;font-family:inherit">Clear</button>
+      </div>
+      <div id="log-entries" class="mono" style="background:rgba(0,0,0,0.3);border-radius:10px;border:1px solid rgba(255,255,255,0.05);padding:14px;max-height:200px;overflow-y:auto;font-size:11px;line-height:1.8"></div>
+    </div>
+  </div>
+
+  <!-- LIBRARY TAB -->
+  <div id="tab-content-library" style="display:none;max-width:720px;margin:0 auto;padding:24px 20px">
+    <!-- Sync card -->
+    <div id="library-sync" class="card" style="margin-bottom:24px"></div>
+
+    <!-- Stats -->
+    <div id="library-stats" style="display:none;margin-bottom:20px"></div>
+
+    <!-- Search -->
+    <div id="library-search-container" style="display:none;margin-bottom:16px">
+      <input id="library-search" type="text" class="input" placeholder="Search your library by song, artist, or album..." />
+    </div>
+
+    <!-- Track list -->
+    <div id="library-tracks"></div>
+
+    <!-- Load more -->
+    <div id="library-load-more" style="display:none;text-align:center;padding:16px">
+      <button onclick="loadMoreTracks()" class="btn btn-outline btn-sm">Load More</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ═══════ STATE ═══════
+let userId = localStorage.getItem("sr_user_id");
+let rules = [];
+let logs = [];
+let playback = null;
+let status = null;
+let pollTimer = null;
+
+// Builder
+let buildStep = 0;
+let buildTrigger = null;
+let buildActions = [];
+let searchResults = [];
+let searchTimer = null;
+
+const redirectUri = location.origin + "/callback";
+
+// ═══════ HELPERS ═══════
+function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+
+function msToTime(ms) {
+  const s = Math.floor(ms / 1000);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+async function api(path, opts = {}) {
+  const sep = path.includes("?") ? "&" : "?";
+  const url = `${path}${sep}user_id=${encodeURIComponent(userId)}`;
+  const r = await fetch(url, {
+    ...opts,
+    headers: { "X-User-ID": userId, "Content-Type": "application/json", ...opts.headers },
+  });
+  if (r.status === 204) return null;
+  const text = await r.text();
+  if (!text || text === "null") return null;
+  return JSON.parse(text);
+}
+
+function extractTrackId(input) {
+  const s = input.trim();
+  const urlMatch = s.match(/open\.spotify\.com\/track\/([a-zA-Z0-9]{22})/);
+  if (urlMatch) return urlMatch[1];
+  const uriMatch = s.match(/spotify:track:([a-zA-Z0-9]{22})/);
+  if (uriMatch) return uriMatch[1];
+  if (/^[a-zA-Z0-9]{22}$/.test(s)) return s;
+  return null;
+}
+
+function addLog(msg) {
+  logs.unshift({ msg, time: new Date().toLocaleTimeString() });
+  if (logs.length > 80) logs.length = 80;
+  renderLog();
+}
+
+function copyRedirectUri() {
+  navigator.clipboard.writeText(redirectUri);
+  document.getElementById("copy-hint").textContent = "Copied!";
+  setTimeout(() => document.getElementById("copy-hint").textContent = "click to copy", 1500);
+}
+
+// ═══════ INIT ═══════
+async function init() {
+  document.getElementById("redirect-uri-text").textContent = redirectUri;
+
+  const params = new URLSearchParams(location.search);
+  if (params.get("error")) {
+    showLogin(decodeURIComponent(params.get("error")));
+    history.replaceState({}, "", "/");
+    return;
+  }
+  if (params.get("auth") === "success" && params.get("user_id")) {
+    userId = params.get("user_id");
+    localStorage.setItem("sr_user_id", userId);
+    history.replaceState({}, "", "/");
+  }
+
+  if (userId) {
+    try {
+      const data = await api("/api/token");
+      if (data?.access_token) {
+        showDashboard(data.display_name);
+        return;
+      }
+    } catch {}
+    localStorage.removeItem("sr_user_id");
+    userId = null;
+  }
+  showLogin();
+}
+
+// ═══════ AUTH ═══════
+function showLogin(error) {
+  document.getElementById("login-view").style.display = "";
+  document.getElementById("dashboard-view").style.display = "none";
+
+  const inp = document.getElementById("cid-input");
+  const btn = document.getElementById("login-btn");
+  const errEl = document.getElementById("login-error");
+
+  if (error) { errEl.textContent = error; errEl.style.display = ""; }
+  else errEl.style.display = "none";
+
+  inp.oninput = () => {
+    const has = inp.value.trim();
+    btn.className = `btn ${has ? "btn-green" : "btn-dim"}`;
+    btn.style.width = "100%";
+  };
+  inp.onkeydown = e => { if (e.key === "Enter" && inp.value.trim()) doLogin(inp.value.trim()); };
+  btn.onclick = () => { if (inp.value.trim()) doLogin(inp.value.trim()); };
+}
+
+function doLogin(cid) {
+  window.location.href = `/login?client_id=${encodeURIComponent(cid)}`;
+}
+
+async function doLogout() {
+  try { await api("/api/auth/logout", { method: "POST", body: JSON.stringify({ user_id: userId }) }); } catch {}
+  localStorage.removeItem("sr_user_id");
+  userId = null;
+  clearInterval(pollTimer);
+  showLogin();
+}
+
+// ═══════ DASHBOARD ═══════
+function showDashboard(displayName) {
+  document.getElementById("login-view").style.display = "none";
+  document.getElementById("dashboard-view").style.display = "";
+  document.getElementById("user-name").textContent = displayName || userId || "";
+
+  loadRules();
+  startPolling();
+}
+
+function startPolling() {
+  pollOnce();
+  pollTimer = setInterval(pollOnce, 3000);
+}
+
+async function pollOnce() {
+  try {
+    playback = await api("/api/playback");
+    status = await api("/api/status");
+    renderNowPlaying();
+    renderStatus();
+
+    // Check for newly armed/fired rules and log them
+    if (status?.armed_rules?.length) {
+      for (const ruleId of status.armed_rules) {
+        const rule = rules.find(r => r.id === ruleId);
+        if (rule && !rule._loggedArmed) {
+          addLog(`🎯 Armed: "${esc(rule.trigger_track_name)}"`);
+          rule._loggedArmed = true;
+        }
+      }
+    }
+    // Clear armed log flags
+    for (const rule of rules) {
+      if (rule._loggedArmed && !status?.armed_rules?.includes(rule.id)) {
+        rule._loggedArmed = false;
+      }
+    }
+  } catch {}
+}
+
+// ═══════ NOW PLAYING ═══════
+function renderNowPlaying() {
+  const el = document.getElementById("now-playing");
+  if (!playback?.track) {
+    el.innerHTML = `<div style="text-align:center;padding:32px;color:rgba(255,255,255,0.3)">
+      <div style="font-size:36px;margin-bottom:10px">🎧</div>
+      <div style="font-size:14px">Nothing playing</div>
+      <div style="font-size:12px;margin-top:4px">Start playing on Spotify</div>
+    </div>`;
+    return;
+  }
+  const t = playback.track;
+  const pct = ((t.progress || 0) / (t.duration || 1)) * 100;
+  const remaining = (t.duration || 0) - (t.progress || 0);
+
+  // Check if any rule is armed
+  const armedActions = [];
+  if (status?.armed_rules?.length) {
+    for (const rId of status.armed_rules) {
+      const rule = rules.find(r => r.id === rId);
+      if (rule?.actions?.[0]) armedActions.push(rule.actions[0].track_name);
+    }
+  }
+
+  el.innerHTML = `
+    <div style="display:flex;gap:18px;align-items:center">
+      ${t.image ? `<img src="${t.image}" style="width:80px;height:80px;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.4)">` : ""}
+      <div style="flex:1;min-width:0">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:${playback.is_playing ? '#1DB954' : 'rgba(255,255,255,0.35)'};margin-bottom:4px">
+          ${playback.is_playing ? '▶ Now Playing' : '⏸ Paused'}
+        </div>
+        <div style="font-size:17px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.name)}</div>
+        <div style="font-size:13px;color:rgba(255,255,255,0.5);margin-top:2px">${esc(t.artist)}</div>
+        <div style="margin-top:10px;display:flex;align-items:center;gap:8px">
+          <span class="mono" style="font-size:11px;color:rgba(255,255,255,0.3)">${msToTime(t.progress || 0)}</span>
+          <div style="flex:1;height:3px;border-radius:2px;background:rgba(255,255,255,0.1);overflow:hidden">
+            <div style="width:${pct}%;height:100%;background:#1DB954;border-radius:2px;transition:width 1s linear"></div>
+          </div>
+          <span class="mono" style="font-size:11px;color:rgba(255,255,255,0.3)">-${msToTime(remaining)}</span>
+        </div>
+      </div>
+    </div>
+    ${armedActions.length ? `
+      <div style="margin-top:14px;padding:10px 14px;border-radius:10px;background:rgba(29,185,84,0.08);border:1px solid rgba(29,185,84,0.2);display:flex;align-items:center;gap:8px">
+        <span style="font-size:14px">⚡</span>
+        <span style="font-size:12px;font-weight:600;color:#1DB954">Playing "${esc(armedActions[0])}" next</span>
+      </div>` : ""}`;
+}
+
+function renderStatus() {
+  const dot = document.getElementById("status-dot");
+  const text = document.getElementById("status-text");
+  if (status?.monitoring) {
+    dot.style.background = "#1DB954";
+    dot.classList.add("pulse");
+    text.textContent = `Monitoring · ${status.active_rules} rule${status.active_rules !== 1 ? "s" : ""}`;
+    text.style.color = "#1DB954";
+  } else {
+    dot.style.background = "rgba(255,255,255,0.3)";
+    dot.classList.remove("pulse");
+    text.textContent = "Offline";
+    text.style.color = "rgba(255,255,255,0.4)";
+  }
+}
+
+// ═══════ RULES ═══════
+async function loadRules() {
+  try {
+    rules = await api("/api/rules") || [];
+    renderRules();
+  } catch (e) { addLog(`❌ Failed to load rules: ${e.message}`); }
+}
+
+function renderRules() {
+  document.getElementById("rule-count").textContent = rules.length;
+  const el = document.getElementById("rules-list");
+
+  if (rules.length === 0 && buildStep === 0) {
+    el.innerHTML = `
+      <div style="text-align:center;padding:44px 24px;background:rgba(255,255,255,0.02);border-radius:16px;border:1px dashed rgba(255,255,255,0.08)">
+        <div style="font-size:32px;margin-bottom:10px">🎵</div>
+        <div style="font-size:15px;font-weight:600;color:rgba(255,255,255,0.5);margin-bottom:6px">No rules yet</div>
+        <div style="font-size:13px;color:rgba(255,255,255,0.3);max-width:300px;margin:0 auto">
+          Create a rule to play a specific song right after a trigger track.
+        </div>
+      </div>`;
+    return;
+  }
+
+  el.innerHTML = rules.map(r => {
+    const armed = status?.armed_rules?.includes(r.id);
+    const img = r.trigger_track_image || "";
+    return `
+    <div style="background:${r.enabled ? (armed ? 'rgba(29,185,84,0.08)' : 'rgba(29,185,84,0.04)') : 'rgba(255,255,255,0.02)'};border:1px solid ${r.enabled ? (armed ? 'rgba(29,185,84,0.3)' : 'rgba(29,185,84,0.15)') : 'rgba(255,255,255,0.06)'};border-radius:14px;padding:16px;margin-bottom:10px;opacity:${r.enabled ? 1 : 0.5};transition:all 0.3s">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <div onclick="toggleRule('${r.id}')" style="width:38px;height:20px;border-radius:10px;background:${r.enabled ? '#1DB954' : 'rgba(255,255,255,0.15)'};cursor:pointer;position:relative">
+            <div style="width:16px;height:16px;border-radius:50%;background:#fff;position:absolute;top:2px;left:${r.enabled ? '20' : '2'}px;transition:left 0.2s;box-shadow:0 1px 3px rgba(0,0,0,0.3)"></div>
+          </div>
+          <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:${armed ? '#1DB954' : r.enabled ? '#1DB954' : 'rgba(255,255,255,0.3)'}">
+            ${armed ? '⚡ Armed' : r.enabled ? 'Active' : 'Paused'}
+          </span>
+        </div>
+        <button onclick="deleteRule('${r.id}')" style="background:none;border:none;color:rgba(255,255,255,0.2);font-size:15px;cursor:pointer">🗑</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+        ${img ? `<img src="${img}" style="width:38px;height:38px;border-radius:6px">` : ""}
+        <div>
+          <div style="font-size:11px;color:rgba(255,255,255,0.3);font-weight:700;text-transform:uppercase;letter-spacing:0.06em">When playing</div>
+          <div style="font-size:14px;font-weight:600">${esc(r.trigger_track_name || "Unknown")}</div>
+          <div style="font-size:12px;color:rgba(255,255,255,0.4)">${esc(r.trigger_track_artist || "")}</div>
+        </div>
+      </div>
+      <div style="margin-left:18px;border-left:2px solid rgba(29,185,84,0.2);padding-left:14px">
+        <div style="font-size:11px;color:rgba(255,255,255,0.3);font-weight:700;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px">Play next</div>
+        ${(r.actions || []).map(a => `
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+            ${a.track_image ? `<img src="${a.track_image}" style="width:26px;height:26px;border-radius:4px">` : ""}
+            <div>
+              <div style="font-size:12px;font-weight:500;color:rgba(255,255,255,0.8)">${esc(a.track_name || "Unknown")}</div>
+              <div style="font-size:11px;color:rgba(255,255,255,0.3)">${esc(a.track_artist || "")}</div>
+            </div>
+          </div>
+        `).join("")}
+      </div>
+      ${r.last_fired_at ? `<div style="margin-top:8px;font-size:11px;color:rgba(255,255,255,0.2)">Last fired: ${new Date(r.last_fired_at * 1000).toLocaleString()}${r.fire_count ? ` · Fired ${r.fire_count} time${r.fire_count !== 1 ? 's' : ''}` : ''}</div>` : ""}
+    </div>`;
+  }).join("");
+}
+
+async function toggleRule(id) {
+  try {
+    const result = await api(`/api/rules/${id}/toggle`, { method: "PATCH" });
+    const rule = rules.find(r => r.id === id);
+    if (rule) rule.enabled = result.enabled;
+    renderRules();
+  } catch (e) { addLog(`❌ Toggle failed: ${e.message}`); }
+}
+
+async function deleteRule(id) {
+  try {
+    await api(`/api/rules/${id}`, { method: "DELETE" });
+    rules = rules.filter(r => r.id !== id);
+    renderRules();
+    addLog("🗑 Rule deleted");
+  } catch (e) { addLog(`❌ Delete failed: ${e.message}`); }
+}
+
+// ═══════ BUILDER ═══════
+function startBuild() {
+  buildStep = 1; buildTrigger = null; buildActions = []; searchResults = [];
+  document.getElementById("new-rule-btn").style.display = "none";
+  renderBuilder();
+}
+
+function cancelBuild() {
+  buildStep = 0; searchResults = [];
+  document.getElementById("new-rule-btn").style.display = "";
+  document.getElementById("builder").style.display = "none";
+  document.getElementById("builder").innerHTML = "";
+}
+
+function renderBuilder() {
+  const el = document.getElementById("builder");
+  el.style.display = "";
+
+  if (buildStep === 1) {
+    el.innerHTML = `
+      <div class="card">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+          <h3 style="font-size:17px;font-weight:700">① When this song plays...</h3>
+          <button onclick="cancelBuild()" style="background:none;border:none;color:rgba(255,255,255,0.4);font-size:18px;cursor:pointer">✕</button>
+        </div>
+        <input id="build-search" type="text" class="input" placeholder="Search or paste a Spotify link..." />
+        <div style="font-size:11px;color:rgba(255,255,255,0.2);margin-top:5px">Supports: search terms, Spotify URLs, URIs, or track IDs</div>
+        <div id="build-results" style="display:flex;flex-direction:column;gap:4px;margin-top:8px;max-height:300px;overflow-y:auto"></div>
+      </div>`;
+    const inp = document.getElementById("build-search");
+    inp.oninput = () => doSearch(inp.value, "trigger");
+    inp.onpaste = () => setTimeout(() => doSearch(inp.value, "trigger"), 50);
+    inp.focus();
+
+  } else if (buildStep === 2) {
+    el.innerHTML = `
+      <div class="card">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+          <h3 style="font-size:17px;font-weight:700">② Play next...</h3>
+          <button onclick="cancelBuild()" style="background:none;border:none;color:rgba(255,255,255,0.4);font-size:18px;cursor:pointer">✕</button>
+        </div>
+        <div style="margin-bottom:14px;padding:10px 14px;border-radius:8px;background:rgba(29,185,84,0.08);border:1px solid rgba(29,185,84,0.2)">
+          <span style="font-size:11px;color:rgba(29,185,84,0.7);font-weight:600;text-transform:uppercase;letter-spacing:0.06em">Trigger</span>
+          <div style="font-size:13px;color:#1DB954;font-weight:600;margin-top:2px">${esc(buildTrigger.name)} — ${esc(buildTrigger.artist)}</div>
+        </div>
+        <div id="build-actions-list"></div>
+        <input id="build-search" type="text" class="input" placeholder="Search or paste a Spotify link..." />
+        <div style="font-size:11px;color:rgba(255,255,255,0.2);margin-top:5px">Supports: search terms, Spotify URLs, URIs, or track IDs</div>
+        <div id="build-results" style="display:flex;flex-direction:column;gap:4px;margin-top:8px;max-height:300px;overflow-y:auto"></div>
+        <div style="display:flex;gap:10px;margin-top:14px">
+          <button onclick="buildStep=1;searchResults=[];renderBuilder()" class="btn btn-outline btn-sm">← Back</button>
+          <button id="build-save" onclick="saveRule()" class="btn btn-dim" style="flex:1">Save Rule (0 songs)</button>
+        </div>
+      </div>`;
+    const inp = document.getElementById("build-search");
+    inp.oninput = () => doSearch(inp.value, "action");
+    inp.onpaste = () => setTimeout(() => doSearch(inp.value, "action"), 50);
+    inp.focus();
+    renderBuildActions();
+  }
+}
+
+function renderBuildActions() {
+  const list = document.getElementById("build-actions-list");
+  if (!list) return;
+  list.innerHTML = buildActions.map((t, i) => `
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
+      <span style="font-size:11px;color:rgba(255,255,255,0.3);width:18px;text-align:center;font-weight:700">${i+1}</span>
+      <div class="track" style="flex:1;cursor:default">
+        ${t.image_small || t.image ? `<img src="${t.image_small || t.image}">` : ""}
+        <div style="flex:1;min-width:0">
+          <div class="name">${esc(t.name)}</div>
+          <div class="meta">${esc(t.artist)} · ${msToTime(t.duration || 0)}</div>
+        </div>
+        <div class="action" onclick="buildActions.splice(${i},1);renderBuildActions()" style="cursor:pointer">✕</div>
+      </div>
+    </div>
+  `).join("") + (buildActions.length ? '<div style="margin-bottom:10px"></div>' : "");
+
+  const btn = document.getElementById("build-save");
+  if (btn) {
+    const n = buildActions.length;
+    btn.textContent = `Save Rule (${n} song${n !== 1 ? "s" : ""})`;
+    btn.className = `btn ${n > 0 ? "btn-green" : "btn-dim"}`;
+    btn.style.flex = "1";
+  }
+}
+
+function doSearch(q, mode) {
+  clearTimeout(searchTimer);
+  const resultsEl = document.getElementById("build-results");
+  const query = q.trim();
+  if (!query) { searchResults = []; if (resultsEl) resultsEl.innerHTML = ""; return; }
+
+  const trackId = extractTrackId(query);
+  if (trackId) {
+    if (resultsEl) resultsEl.innerHTML = '<div style="padding:10px;color:rgba(255,255,255,0.4);font-size:12px">Resolving link...</div>';
+    (async () => {
+      try {
+        const track = await api(`/api/track/${trackId}`);
+        if (track) { searchResults = [track]; renderSearchResults(mode); }
+        else if (resultsEl) resultsEl.innerHTML = '<div style="padding:10px;color:#ff5050;font-size:12px">Track not found</div>';
+      } catch {
+        if (resultsEl) resultsEl.innerHTML = '<div style="padding:10px;color:#ff5050;font-size:12px">Could not resolve track</div>';
+      }
+    })();
+    return;
+  }
+
+  if (resultsEl) resultsEl.innerHTML = '<div style="padding:10px;color:rgba(255,255,255,0.4);font-size:12px">Searching...</div>';
+  searchTimer = setTimeout(async () => {
+    try { searchResults = await api(`/api/search?q=${encodeURIComponent(query)}`) || []; }
+    catch { searchResults = []; }
+    renderSearchResults(mode);
+  }, 400);
+}
+
+function renderSearchResults(mode) {
+  const el = document.getElementById("build-results");
+  if (!el) return;
+  el.innerHTML = searchResults.map((t, i) => {
+    const img = t.image_small || t.image || "";
+    return `<div class="track" onclick="${mode === 'trigger' ? `selectTrigger(${i})` : `selectAction(${i})`}">
+      ${img ? `<img src="${img}">` : ""}
+      <div style="flex:1;min-width:0">
+        <div class="name">${esc(t.name)}</div>
+        <div class="meta">${esc(t.artist)} · ${msToTime(t.duration || 0)}</div>
+      </div>
+      <div class="action">Select</div>
+    </div>`;
+  }).join("");
+}
+
+window.selectTrigger = function(i) {
+  buildTrigger = searchResults[i];
+  buildStep = 2;
+  searchResults = [];
+  renderBuilder();
+};
+
+window.selectAction = function(i) {
+  buildActions.push(searchResults[i]);
+  searchResults = [];
+  const inp = document.getElementById("build-search");
+  if (inp) inp.value = "";
+  const res = document.getElementById("build-results");
+  if (res) res.innerHTML = "";
+  renderBuildActions();
+};
+
+async function saveRule() {
+  if (!buildTrigger || !buildActions.length) return;
+  try {
+    const rule = await api("/api/rules", {
+      method: "POST",
+      body: JSON.stringify({
+        trigger: buildTrigger,
+        actions: buildActions,
+      }),
+    });
+    rules.unshift(rule);
+    addLog(`📝 Rule: "${esc(buildTrigger.name)}" → play "${esc(buildActions[0].name)}" next`);
+    cancelBuild();
+    renderRules();
+  } catch (e) { addLog(`❌ Save failed: ${e.message}`); }
+}
+
+// ═══════ LOG ═══════
+function renderLog() {
+  const section = document.getElementById("log-section");
+  const el = document.getElementById("log-entries");
+  if (logs.length === 0) { section.style.display = "none"; return; }
+  section.style.display = "";
+  el.innerHTML = logs.map(e => `<div style="color:rgba(255,255,255,0.45)"><span style="color:rgba(255,255,255,0.2);margin-right:8px">${e.time}</span>${e.msg}</div>`).join("");
+}
+
+// ═══════ TABS ═══════
+let currentTab = "rules";
+
+function switchTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll(".tab-btn").forEach(b => {
+    b.style.color = "rgba(255,255,255,0.4)";
+    b.style.borderBottomColor = "transparent";
+  });
+  const activeBtn = document.getElementById(`tab-${tab}`);
+  if (activeBtn) {
+    activeBtn.style.color = "#1DB954";
+    activeBtn.style.borderBottomColor = "#1DB954";
+  }
+  document.getElementById("tab-content-rules").style.display = tab === "rules" ? "" : "none";
+  document.getElementById("tab-content-library").style.display = tab === "library" ? "" : "none";
+
+  if (tab === "library") {
+    loadLibrary();
+  }
+}
+
+// ═══════ LIBRARY ═══════
+let libraryTracks = [];
+let libraryPage = 0;
+let libraryTotal = 0;
+let librarySearchTimer = null;
+let libraryQuery = "";
+let syncPollTimer = null;
+let playlistLookup = {};
+
+async function loadLibrary() {
+  renderSyncCard();
+  await loadLibraryStats();
+  await loadLibraryTracks();
+}
+
+async function loadLibraryStats() {
+  try {
+    const stats = await api("/api/library/stats");
+    const el = document.getElementById("library-stats");
+    if (!stats || stats.unique_tracks === 0) {
+      el.style.display = "none";
+      return;
+    }
+    el.style.display = "";
+    const synced = stats.last_synced ? new Date(stats.last_synced * 1000).toLocaleString() : "Never";
+    el.innerHTML = `
+      <div style="display:flex;gap:12px;flex-wrap:wrap">
+        <div style="flex:1;min-width:120px;padding:14px;border-radius:12px;background:rgba(29,185,84,0.06);border:1px solid rgba(29,185,84,0.12);text-align:center">
+          <div style="font-size:24px;font-weight:800;color:#1DB954">${stats.unique_tracks.toLocaleString()}</div>
+          <div style="font-size:11px;color:rgba(255,255,255,0.4);font-weight:600;text-transform:uppercase;letter-spacing:0.06em">Unique Tracks</div>
+        </div>
+        <div style="flex:1;min-width:120px;padding:14px;border-radius:12px;background:rgba(29,185,84,0.06);border:1px solid rgba(29,185,84,0.12);text-align:center">
+          <div style="font-size:24px;font-weight:800;color:#1DB954">${stats.total_playlists.toLocaleString()}</div>
+          <div style="font-size:11px;color:rgba(255,255,255,0.4);font-weight:600;text-transform:uppercase;letter-spacing:0.06em">Playlists</div>
+        </div>
+        <div style="flex:1;min-width:120px;padding:14px;border-radius:12px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);text-align:center">
+          <div style="font-size:24px;font-weight:800;color:rgba(255,255,255,0.6)">${stats.total_entries.toLocaleString()}</div>
+          <div style="font-size:11px;color:rgba(255,255,255,0.4);font-weight:600;text-transform:uppercase;letter-spacing:0.06em">Total Entries</div>
+        </div>
+      </div>
+      <div style="font-size:11px;color:rgba(255,255,255,0.2);margin-top:8px;text-align:right">Last synced: ${synced}</div>
+    `;
+  } catch {}
+}
+
+async function renderSyncCard() {
+  const el = document.getElementById("library-sync");
+  try {
+    const syncStatus = await api("/api/library/sync-status");
+
+    if (syncStatus.status === "syncing") {
+      const pct = syncStatus.progress_total > 0 ? Math.round((syncStatus.progress_current / syncStatus.progress_total) * 100) : 0;
+      el.innerHTML = `
+        <div style="display:flex;align-items:center;gap:14px;margin-bottom:14px">
+          <div style="font-size:28px" class="pulse">📚</div>
+          <div>
+            <div style="font-size:16px;font-weight:700">Syncing Playlists...</div>
+            <div style="font-size:13px;color:rgba(255,255,255,0.5);margin-top:2px">${esc(syncStatus.message || "")}</div>
+          </div>
+        </div>
+        <div style="height:6px;border-radius:3px;background:rgba(255,255,255,0.08);overflow:hidden">
+          <div style="width:${pct}%;height:100%;background:#1DB954;border-radius:3px;transition:width 0.5s"></div>
+        </div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.3);margin-top:6px;text-align:right">${pct}%</div>
+      `;
+      // Keep polling sync status
+      if (!syncPollTimer) {
+        syncPollTimer = setInterval(async () => {
+          await renderSyncCard();
+          await loadLibraryStats();
+        }, 2000);
+      }
+      return;
+    }
+
+    // Clear poll timer if done
+    if (syncPollTimer) { clearInterval(syncPollTimer); syncPollTimer = null; }
+
+    if (syncStatus.status === "done") {
+      // Reload tracks after sync completes
+      await loadLibraryTracks();
+    }
+
+    const hasData = syncStatus.status === "done" || syncStatus.completed_at;
+    el.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div style="display:flex;align-items:center;gap:14px">
+          <div style="font-size:28px">📚</div>
+          <div>
+            <div style="font-size:16px;font-weight:700">Playlist Library</div>
+            <div style="font-size:13px;color:rgba(255,255,255,0.5);margin-top:2px">
+              ${hasData ? esc(syncStatus.message || "Sync complete") : "Scan all your playlists to see which songs appear where"}
+            </div>
+          </div>
+        </div>
+        <button onclick="startSync()" class="btn btn-sm" style="background:rgba(29,185,84,0.15);color:#1DB954;border:none;white-space:nowrap">
+          ${hasData ? "🔄 Re-sync" : "🔍 Sync Now"}
+        </button>
+      </div>
+      ${!hasData ? '<div style="font-size:12px;color:rgba(255,185,29,0.65);margin-top:12px;padding:8px 12px;border-radius:6px;background:rgba(255,185,29,0.06);border:1px solid rgba(255,185,29,0.12);line-height:1.5">⏱ Sync time depends on your library size — typically 5-10 minutes. The server processes playlists in batches of 50 to stay within Spotify\'s rate limits. You can close this page and come back later.</div>' : ''}
+      ${syncStatus.status === "error" ? `<div style="font-size:12px;color:#ff5050;margin-top:10px">${esc(syncStatus.message)}</div>` : ""}
+    `;
+  } catch {
+    el.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div style="display:flex;align-items:center;gap:14px">
+          <div style="font-size:28px">📚</div>
+          <div>
+            <div style="font-size:16px;font-weight:700">Playlist Library</div>
+            <div style="font-size:13px;color:rgba(255,255,255,0.5);margin-top:2px">Scan all your playlists to see which songs appear where</div>
+          </div>
+        </div>
+        <button onclick="startSync()" class="btn btn-sm" style="background:rgba(29,185,84,0.15);color:#1DB954;border:none">🔍 Sync Now</button>
+      </div>
+      <div style="font-size:12px;color:rgba(255,185,29,0.65);margin-top:12px;padding:8px 12px;border-radius:6px;background:rgba(255,185,29,0.06);border:1px solid rgba(255,185,29,0.12);line-height:1.5">⏱ Sync time depends on your library size — typically 5-10 minutes. The server processes playlists in batches of 50 to stay within Spotify's rate limits. You can close this page and come back later.</div>
+    `;
+  }
+}
+
+async function startSync() {
+  try {
+    await api("/api/library/sync", { method: "POST" });
+    renderSyncCard();
+  } catch (e) {
+    addLog(`❌ Sync start failed: ${e.message}`);
+  }
+}
+
+async function loadLibraryTracks(append = false) {
+  const searchContainer = document.getElementById("library-search-container");
+  const tracksEl = document.getElementById("library-tracks");
+
+  if (!append) {
+    libraryPage = 0;
+    libraryTracks = [];
+  }
+
+  try {
+    const q = libraryQuery ? `&q=${encodeURIComponent(libraryQuery)}` : "";
+    const data = await api(`/api/library/tracks?page=${libraryPage}&limit=50${q}`);
+
+    if (!data?.tracks?.length && !append) {
+      searchContainer.style.display = "none";
+      tracksEl.innerHTML = "";
+      document.getElementById("library-load-more").style.display = "none";
+      return;
+    }
+
+    searchContainer.style.display = "";
+    libraryTotal = data.total;
+
+    if (append) {
+      libraryTracks.push(...data.tracks);
+    } else {
+      libraryTracks = data.tracks;
+    }
+
+    renderLibraryTracks();
+
+    // Show/hide load more
+    const loaded = (libraryPage + 1) * 50;
+    document.getElementById("library-load-more").style.display = loaded < libraryTotal ? "" : "none";
+
+    // Bind search
+    const searchInput = document.getElementById("library-search");
+    searchInput.oninput = () => {
+      clearTimeout(librarySearchTimer);
+      librarySearchTimer = setTimeout(() => {
+        libraryQuery = searchInput.value.trim();
+        loadLibraryTracks();
+      }, 400);
+    };
+  } catch {}
+}
+
+function loadMoreTracks() {
+  libraryPage++;
+  loadLibraryTracks(true);
+}
+
+function renderLibraryTracks() {
+  const el = document.getElementById("library-tracks");
+
+  el.innerHTML = libraryTracks.map((t, i) => {
+    const img = t.image || "";
+    const plCount = t.playlist_count || 0;
+    const plBadgeColor = plCount >= 5 ? "#1DB954" : plCount >= 3 ? "rgba(29,185,84,0.7)" : "rgba(255,255,255,0.4)";
+    const plNames = (t.playlists || []).map(p => esc(p.name));
+
+    return `
+    <div style="border-bottom:1px solid rgba(255,255,255,0.04);padding:10px 0">
+      <div style="display:flex;align-items:center;gap:12px;cursor:pointer" onclick="toggleTrackDropdown(${i})">
+        ${img ? `<img src="${img}" style="width:40px;height:40px;border-radius:6px;flex-shrink:0">` : '<div style="width:40px;height:40px;border-radius:6px;background:rgba(255,255,255,0.06);flex-shrink:0"></div>'}
+        <div style="flex:1;min-width:0">
+          <div style="font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.name)}</div>
+          <div style="font-size:12px;color:rgba(255,255,255,0.4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.artist)}${t.album ? ` · ${esc(t.album)}` : ""}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+          <span style="font-size:13px;font-weight:800;color:${plBadgeColor}">${plCount}</span>
+          <span style="font-size:11px;color:rgba(255,255,255,0.3)">playlist${plCount !== 1 ? "s" : ""}</span>
+          <span id="arrow-${i}" style="font-size:10px;color:rgba(255,255,255,0.2);transition:transform 0.2s">▼</span>
+        </div>
+      </div>
+      <div id="dropdown-${i}" style="display:none;margin-top:8px;margin-left:52px">
+        ${plNames.map(name => `
+          <div style="display:flex;align-items:center;gap:8px;padding:5px 0">
+            <span style="color:#1DB954;font-size:12px">♫</span>
+            <span style="font-size:12px;color:rgba(255,255,255,0.6)">${name}</span>
+          </div>
+        `).join("")}
+      </div>
+    </div>`;
+  }).join("");
+
+  // Show count
+  const showing = libraryTracks.length;
+  const total = libraryTotal;
+  if (total > 0) {
+    el.innerHTML = `<div style="font-size:12px;color:rgba(255,255,255,0.25);margin-bottom:10px;text-align:right">${showing.toLocaleString()} of ${total.toLocaleString()} tracks · sorted by most playlists</div>` + el.innerHTML;
+  }
+}
+
+window.toggleTrackDropdown = function(i) {
+  const dd = document.getElementById(`dropdown-${i}`);
+  const arrow = document.getElementById(`arrow-${i}`);
+  if (!dd) return;
+  const open = dd.style.display !== "none";
+  dd.style.display = open ? "none" : "";
+  if (arrow) arrow.style.transform = open ? "" : "rotate(180deg)";
+};
+
+// ═══════ GO ═══════
+init();
+</script>
+</body>
+</html>
