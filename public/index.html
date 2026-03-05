@@ -89,6 +89,7 @@
       <button onclick="switchTab('rules')" id="tab-rules" class="tab-btn tab-active" style="padding:10px 20px;border:none;background:none;color:#1DB954;font-size:14px;font-weight:700;cursor:pointer;border-bottom:2px solid #1DB954;font-family:inherit;margin-bottom:-1px">⚡ Rules</button>
       <button onclick="switchTab('library')" id="tab-library" class="tab-btn" style="padding:10px 20px;border:none;background:none;color:rgba(255,255,255,0.4);font-size:14px;font-weight:700;cursor:pointer;border-bottom:2px solid transparent;font-family:inherit;margin-bottom:-1px">📚 Library</button>
       <button onclick="switchTab('tracker')" id="tab-tracker" class="tab-btn" style="padding:10px 20px;border:none;background:none;color:rgba(255,255,255,0.4);font-size:14px;font-weight:700;cursor:pointer;border-bottom:2px solid transparent;font-family:inherit;margin-bottom:-1px">📋 Tracker</button>
+      <button onclick="switchTab('stats')" id="tab-stats" class="tab-btn" style="padding:10px 20px;border:none;background:none;color:rgba(255,255,255,0.4);font-size:14px;font-weight:700;cursor:pointer;border-bottom:2px solid transparent;font-family:inherit;margin-bottom:-1px">📊 Stats</button>
     </div>
   </div>
 
@@ -133,6 +134,65 @@
       <div id="tracker-error" style="color:#ff5050;font-size:12px;margin-top:8px;display:none"></div>
     </div>
     <div id="tracker-list"></div>
+  </div>
+
+  <!-- STATS TAB -->
+  <div id="tab-content-stats" style="display:none;max-width:720px;margin:0 auto;padding:24px 20px">
+    <!-- Now Playing -->
+    <div id="stats-now-playing" class="card" style="margin-bottom:20px"></div>
+    <!-- Import card -->
+    <div class="card" style="margin-bottom:20px">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div style="display:flex;align-items:center;gap:14px">
+          <div style="font-size:28px">📊</div>
+          <div>
+            <div style="font-size:16px;font-weight:700">Listening History</div>
+            <div id="stats-listen-count" style="font-size:13px;color:rgba(255,255,255,0.5);margin-top:2px">Loading...</div>
+          </div>
+        </div>
+        <label class="btn btn-sm" style="background:rgba(29,185,84,0.15);color:#1DB954;border:none;cursor:pointer;white-space:nowrap">
+          Import History
+          <input type="file" id="import-files" multiple accept=".json" style="display:none" onchange="importFiles(this.files)" />
+        </label>
+      </div>
+      <div id="import-status" style="display:none;margin-top:12px;padding:10px 14px;border-radius:8px;background:rgba(29,185,84,0.06);border:1px solid rgba(29,185,84,0.15);font-size:12px;color:rgba(255,255,255,0.7)"></div>
+    </div>
+
+    <!-- Time chips -->
+    <div id="stats-time-chips" style="display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap">
+      <button onclick="setStatsPeriod('7d')" class="btn btn-sm btn-outline stats-chip">7d</button>
+      <button onclick="setStatsPeriod('30d')" class="btn btn-sm btn-outline stats-chip">30d</button>
+      <button onclick="setStatsPeriod('90d')" class="btn btn-sm btn-outline stats-chip">90d</button>
+      <button onclick="setStatsPeriod('6m')" class="btn btn-sm btn-outline stats-chip">6m</button>
+      <button onclick="setStatsPeriod('1y')" class="btn btn-sm btn-outline stats-chip">1y</button>
+      <button onclick="setStatsPeriod('all')" class="btn btn-sm stats-chip" style="background:rgba(29,185,84,0.2);color:#1DB954;border:1px solid rgba(29,185,84,0.3)">All Time</button>
+      <div style="display:flex;gap:4px;align-items:center;margin-left:auto">
+        <input type="date" id="stats-from" class="input" style="width:130px;padding:6px 8px;font-size:11px" onchange="setStatsCustom()" />
+        <span style="color:rgba(255,255,255,0.3);font-size:11px">to</span>
+        <input type="date" id="stats-to" class="input" style="width:130px;padding:6px 8px;font-size:11px" onchange="setStatsCustom()" />
+      </div>
+    </div>
+
+    <!-- Overview cards -->
+    <div id="stats-overview" style="margin-bottom:24px"></div>
+
+    <!-- Sort toggle -->
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px">
+      <span style="font-size:12px;color:rgba(255,255,255,0.4);font-weight:600">Sort by:</span>
+      <button onclick="setStatsSort('count')" id="stats-sort-count" class="btn btn-sm" style="background:rgba(29,185,84,0.2);color:#1DB954;border:1px solid rgba(29,185,84,0.3);padding:4px 12px">Plays</button>
+      <button onclick="setStatsSort('time')" id="stats-sort-time" class="btn btn-sm btn-outline" style="padding:4px 12px">Time</button>
+    </div>
+
+    <!-- Sub-tabs -->
+    <div style="display:flex;gap:4px;margin-bottom:16px;border-bottom:1px solid rgba(255,255,255,0.06)">
+      <button onclick="setStatsView('tracks')" id="stats-view-tracks" style="padding:8px 16px;border:none;background:none;color:#1DB954;font-size:13px;font-weight:700;cursor:pointer;border-bottom:2px solid #1DB954;font-family:inherit;margin-bottom:-1px">Tracks</button>
+      <button onclick="setStatsView('artists')" id="stats-view-artists" style="padding:8px 16px;border:none;background:none;color:rgba(255,255,255,0.4);font-size:13px;font-weight:700;cursor:pointer;border-bottom:2px solid transparent;font-family:inherit;margin-bottom:-1px">Artists</button>
+      <button onclick="setStatsView('albums')" id="stats-view-albums" style="padding:8px 16px;border:none;background:none;color:rgba(255,255,255,0.4);font-size:13px;font-weight:700;cursor:pointer;border-bottom:2px solid transparent;font-family:inherit;margin-bottom:-1px">Albums</button>
+      <button onclick="setStatsView('recent')" id="stats-view-recent" style="padding:8px 16px;border:none;background:none;color:rgba(255,255,255,0.4);font-size:13px;font-weight:700;cursor:pointer;border-bottom:2px solid transparent;font-family:inherit;margin-bottom:-1px">Recent</button>
+    </div>
+
+    <!-- Content -->
+    <div id="stats-content"></div>
   </div>
 
   <!-- LIBRARY TAB -->
@@ -329,12 +389,15 @@ async function pollOnce() {
 // ═══════ NOW PLAYING ═══════
 function renderNowPlaying() {
   const el = document.getElementById("now-playing");
+  const statsEl = document.getElementById("stats-now-playing");
   if (!playback?.track) {
-    el.innerHTML = `<div style="text-align:center;padding:32px;color:rgba(255,255,255,0.3)">
+    const empty = `<div style="text-align:center;padding:32px;color:rgba(255,255,255,0.3)">
       <div style="font-size:36px;margin-bottom:10px">🎧</div>
       <div style="font-size:14px">Nothing playing</div>
       <div style="font-size:12px;margin-top:4px">Start playing on Spotify</div>
     </div>`;
+    el.innerHTML = empty;
+    if (statsEl) statsEl.innerHTML = empty;
     return;
   }
   const t = playback.track;
@@ -373,6 +436,7 @@ function renderNowPlaying() {
         <span style="font-size:14px">⚡</span>
         <span style="font-size:12px;font-weight:600;color:#1DB954">Playing "${esc(armedActions[0])}" next</span>
       </div>` : ""}`;
+  if (statsEl) statsEl.innerHTML = el.innerHTML;
 }
 
 function renderStatus() {
@@ -667,11 +731,14 @@ function switchTab(tab) {
   document.getElementById("tab-content-rules").style.display = tab === "rules" ? "" : "none";
   document.getElementById("tab-content-library").style.display = tab === "library" ? "" : "none";
   document.getElementById("tab-content-tracker").style.display = tab === "tracker" ? "" : "none";
+  document.getElementById("tab-content-stats").style.display = tab === "stats" ? "" : "none";
 
   if (tab === "library") {
     loadLibrary();
   } else if (tab === "tracker") {
     loadTrackedPlaylists();
+  } else if (tab === "stats") {
+    loadStats();
   }
 }
 
@@ -1064,6 +1131,301 @@ async function toggleTrackedTracks(id) {
   } catch {
     el.innerHTML = '<div style="padding:8px;color:#ff5050;font-size:12px">Failed to load tracks</div>';
   }
+}
+
+// ═══════ STATS ═══════
+let statsPeriod = "all";
+let statsSort = "count";
+let statsView = "tracks";
+let statsCustomFrom = "";
+let statsCustomTo = "";
+
+function setStatsPeriod(p) {
+  statsPeriod = p;
+  statsCustomFrom = ""; statsCustomTo = "";
+  document.getElementById("stats-from").value = "";
+  document.getElementById("stats-to").value = "";
+  document.querySelectorAll(".stats-chip").forEach(b => {
+    b.style.background = "transparent"; b.style.color = "rgba(255,255,255,0.6)"; b.style.borderColor = "rgba(255,255,255,0.15)";
+  });
+  const active = event?.target;
+  if (active) { active.style.background = "rgba(29,185,84,0.2)"; active.style.color = "#1DB954"; active.style.borderColor = "rgba(29,185,84,0.3)"; }
+  loadStats();
+}
+
+function setStatsCustom() {
+  statsCustomFrom = document.getElementById("stats-from").value;
+  statsCustomTo = document.getElementById("stats-to").value;
+  if (statsCustomFrom && statsCustomTo) {
+    statsPeriod = "custom";
+    document.querySelectorAll(".stats-chip").forEach(b => {
+      b.style.background = "transparent"; b.style.color = "rgba(255,255,255,0.6)"; b.style.borderColor = "rgba(255,255,255,0.15)";
+    });
+    loadStats();
+  }
+}
+
+function setStatsSort(s) {
+  statsSort = s;
+  document.getElementById("stats-sort-count").style.background = s === "count" ? "rgba(29,185,84,0.2)" : "transparent";
+  document.getElementById("stats-sort-count").style.color = s === "count" ? "#1DB954" : "rgba(255,255,255,0.6)";
+  document.getElementById("stats-sort-count").style.borderColor = s === "count" ? "rgba(29,185,84,0.3)" : "rgba(255,255,255,0.15)";
+  document.getElementById("stats-sort-time").style.background = s === "time" ? "rgba(29,185,84,0.2)" : "transparent";
+  document.getElementById("stats-sort-time").style.color = s === "time" ? "#1DB954" : "rgba(255,255,255,0.6)";
+  document.getElementById("stats-sort-time").style.borderColor = s === "time" ? "rgba(29,185,84,0.3)" : "rgba(255,255,255,0.15)";
+  loadStatsContent();
+}
+
+function setStatsView(v) {
+  statsView = v;
+  ["tracks","artists","albums","recent"].forEach(t => {
+    const btn = document.getElementById(`stats-view-${t}`);
+    btn.style.color = t === v ? "#1DB954" : "rgba(255,255,255,0.4)";
+    btn.style.borderBottomColor = t === v ? "#1DB954" : "transparent";
+  });
+  loadStatsContent();
+}
+
+function statsParams() {
+  if (statsPeriod === "custom" && statsCustomFrom && statsCustomTo) {
+    return `from=${statsCustomFrom}T00:00:00Z&to=${statsCustomTo}T23:59:59Z`;
+  }
+  return `period=${statsPeriod}`;
+}
+
+async function loadStats() {
+  try {
+    const stats = await api(`/api/listens/stats?${statsParams()}`);
+    renderStatsOverview(stats);
+    document.getElementById("stats-listen-count").textContent =
+      `${(stats.total_all_time || 0).toLocaleString()} total listens tracked`;
+  } catch {}
+  loadStatsContent();
+}
+
+function renderStatsOverview(s) {
+  const el = document.getElementById("stats-overview");
+  const hours = s.total_hours || 0;
+  const days = Math.round(hours / 24 * 10) / 10;
+  el.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:10px;margin-bottom:8px">
+      <div style="padding:14px;border-radius:12px;background:rgba(29,185,84,0.06);border:1px solid rgba(29,185,84,0.12);text-align:center">
+        <div style="font-size:22px;font-weight:800;color:#1DB954">${(s.total_listens || 0).toLocaleString()}</div>
+        <div style="font-size:10px;color:rgba(255,255,255,0.4);font-weight:600;text-transform:uppercase;letter-spacing:0.06em">Plays</div>
+      </div>
+      <div style="padding:14px;border-radius:12px;background:rgba(29,185,84,0.06);border:1px solid rgba(29,185,84,0.12);text-align:center">
+        <div style="font-size:22px;font-weight:800;color:#1DB954">${hours.toLocaleString()}h</div>
+        <div style="font-size:10px;color:rgba(255,255,255,0.4);font-weight:600;text-transform:uppercase;letter-spacing:0.06em">${days > 1 ? `${days} days` : "Listen Time"}</div>
+      </div>
+      <div style="padding:14px;border-radius:12px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);text-align:center">
+        <div style="font-size:22px;font-weight:800;color:rgba(255,255,255,0.7)">${(s.unique_tracks || 0).toLocaleString()}</div>
+        <div style="font-size:10px;color:rgba(255,255,255,0.4);font-weight:600;text-transform:uppercase;letter-spacing:0.06em">Tracks</div>
+      </div>
+      <div style="padding:14px;border-radius:12px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);text-align:center">
+        <div style="font-size:22px;font-weight:800;color:rgba(255,255,255,0.7)">${(s.unique_artists || 0).toLocaleString()}</div>
+        <div style="font-size:10px;color:rgba(255,255,255,0.4);font-weight:600;text-transform:uppercase;letter-spacing:0.06em">Artists</div>
+      </div>
+      <div style="padding:14px;border-radius:12px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);text-align:center">
+        <div style="font-size:22px;font-weight:800;color:rgba(255,255,255,0.7)">${(s.unique_albums || 0).toLocaleString()}</div>
+        <div style="font-size:10px;color:rgba(255,255,255,0.4);font-weight:600;text-transform:uppercase;letter-spacing:0.06em">Albums</div>
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;margin-top:10px">
+      <div style="flex:1;padding:12px;border-radius:10px;background:rgba(255,140,0,0.06);border:1px solid rgba(255,140,0,0.15);text-align:center">
+        <div style="font-size:20px;font-weight:800;color:#FF8C00">${s.streak?.current || 0}</div>
+        <div style="font-size:10px;color:rgba(255,255,255,0.4);font-weight:600;text-transform:uppercase;letter-spacing:0.06em">Current Streak</div>
+      </div>
+      <div style="flex:1;padding:12px;border-radius:10px;background:rgba(255,140,0,0.06);border:1px solid rgba(255,140,0,0.15);text-align:center">
+        <div style="font-size:20px;font-weight:800;color:#FF8C00">${s.streak?.longest || 0}</div>
+        <div style="font-size:10px;color:rgba(255,255,255,0.4);font-weight:600;text-transform:uppercase;letter-spacing:0.06em">Longest Streak</div>
+        ${s.streak?.longestStart ? `<div style="font-size:9px;color:rgba(255,255,255,0.25);margin-top:2px">${s.streak.longestStart} — ${s.streak.longestEnd}</div>` : ""}
+      </div>
+      ${s.first_listen ? `<div style="flex:1;padding:12px;border-radius:10px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);text-align:center">
+        <div style="font-size:13px;font-weight:700;color:rgba(255,255,255,0.6)">${new Date(s.first_listen).toLocaleDateString()}</div>
+        <div style="font-size:10px;color:rgba(255,255,255,0.4);font-weight:600;text-transform:uppercase;letter-spacing:0.06em">First Listen</div>
+      </div>` : ""}
+    </div>
+    ${s.song_streak ? `<div style="display:flex;gap:10px;margin-top:10px">
+      <div style="flex:1;padding:12px;border-radius:10px;background:rgba(147,51,234,0.06);border:1px solid rgba(147,51,234,0.15);text-align:center">
+        <div style="font-size:20px;font-weight:800;color:#9333EA">${s.song_streak.longest_repeat}x</div>
+        <div style="font-size:10px;color:rgba(255,255,255,0.4);font-weight:600;text-transform:uppercase;letter-spacing:0.06em">Song on Repeat</div>
+        ${s.song_streak.repeat_track ? `<div style="font-size:9px;color:rgba(255,255,255,0.25);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(s.song_streak.repeat_track.name)}</div>` : ""}
+      </div>
+      <div style="flex:1;padding:12px;border-radius:10px;background:rgba(147,51,234,0.06);border:1px solid rgba(147,51,234,0.15);text-align:center">
+        <div style="font-size:20px;font-weight:800;color:#9333EA">${s.song_streak.longest_unique}</div>
+        <div style="font-size:10px;color:rgba(255,255,255,0.4);font-weight:600;text-transform:uppercase;letter-spacing:0.06em">Unique in a Row</div>
+      </div>
+    </div>` : ""}
+  `;
+}
+
+async function loadStatsContent() {
+  const el = document.getElementById("stats-content");
+  el.innerHTML = '<div style="text-align:center;padding:20px;color:rgba(255,255,255,0.3)">Loading...</div>';
+
+  try {
+    if (statsView === "recent") {
+      const listens = await api("/api/listens/recent?limit=100");
+      renderRecentListens(listens);
+    } else {
+      const data = await api(`/api/listens/top/${statsView}?${statsParams()}&sort=${statsSort}&limit=50`);
+      if (statsView === "tracks") renderTopTracks(data);
+      else if (statsView === "artists") renderTopArtists(data);
+      else if (statsView === "albums") renderTopAlbums(data);
+    }
+  } catch (e) {
+    el.innerHTML = `<div style="text-align:center;padding:20px;color:rgba(255,255,255,0.3)">Failed to load: ${esc(e.message)}</div>`;
+  }
+}
+
+function renderTopTracks(tracks) {
+  const el = document.getElementById("stats-content");
+  if (!tracks.length) { el.innerHTML = '<div style="text-align:center;padding:40px;color:rgba(255,255,255,0.3)">No data for this period</div>'; return; }
+  const maxVal = statsSort === "time" ? tracks[0].total_ms : tracks[0].play_count;
+  el.innerHTML = tracks.map(t => {
+    const val = statsSort === "time" ? t.total_ms : t.play_count;
+    const pct = Math.max(3, (val / maxVal) * 100);
+    const img = t.album_image || "";
+    return `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;padding:8px 10px;border-radius:10px;position:relative;overflow:hidden">
+      <div style="position:absolute;left:0;top:0;bottom:0;width:${pct}%;background:rgba(29,185,84,0.06);border-radius:10px;z-index:0"></div>
+      <span style="font-size:13px;font-weight:800;color:rgba(255,255,255,0.2);width:28px;text-align:right;z-index:1">${t.rank}</span>
+      ${img ? `<img src="${img}" style="width:40px;height:40px;border-radius:6px;z-index:1">` : '<div style="width:40px;height:40px;border-radius:6px;background:rgba(255,255,255,0.06);z-index:1"></div>'}
+      <div style="flex:1;min-width:0;z-index:1">
+        <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.track_name || "Unknown")}</div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.4)">${esc(t.artist_name || "")}${t.album_name ? ` · ${esc(t.album_name)}` : ""}</div>
+      </div>
+      <div style="text-align:right;flex-shrink:0;z-index:1">
+        <div style="font-size:14px;font-weight:800;color:#1DB954">${statsSort === "time" ? t.total_hours + "h" : t.play_count.toLocaleString()}</div>
+        <div style="font-size:10px;color:rgba(255,255,255,0.3)">${statsSort === "time" ? t.play_count + " plays" : t.total_hours + "h"}</div>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+function renderTopArtists(artists) {
+  const el = document.getElementById("stats-content");
+  if (!artists.length) { el.innerHTML = '<div style="text-align:center;padding:40px;color:rgba(255,255,255,0.3)">No data for this period</div>'; return; }
+  const maxVal = statsSort === "time" ? artists[0].total_ms : artists[0].play_count;
+  el.innerHTML = artists.map(a => {
+    const val = statsSort === "time" ? a.total_ms : a.play_count;
+    const pct = Math.max(3, (val / maxVal) * 100);
+    const img = a.image || "";
+    return `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;padding:8px 10px;border-radius:10px;position:relative;overflow:hidden">
+      <div style="position:absolute;left:0;top:0;bottom:0;width:${pct}%;background:rgba(29,185,84,0.06);border-radius:10px;z-index:0"></div>
+      <span style="font-size:13px;font-weight:800;color:rgba(255,255,255,0.2);width:28px;text-align:right;z-index:1">${a.rank}</span>
+      ${img ? `<img src="${img}" style="width:40px;height:40px;border-radius:50%;z-index:1">` : '<div style="width:40px;height:40px;border-radius:50%;background:rgba(255,255,255,0.06);z-index:1"></div>'}
+      <div style="flex:1;min-width:0;z-index:1">
+        <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(a.artist_name)}</div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.4)">${a.unique_tracks} tracks · ${a.unique_albums} albums</div>
+      </div>
+      <div style="text-align:right;flex-shrink:0;z-index:1">
+        <div style="font-size:14px;font-weight:800;color:#1DB954">${statsSort === "time" ? a.total_hours + "h" : a.play_count.toLocaleString()}</div>
+        <div style="font-size:10px;color:rgba(255,255,255,0.3)">${statsSort === "time" ? a.play_count + " plays" : a.total_hours + "h"}</div>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+function renderTopAlbums(albums) {
+  const el = document.getElementById("stats-content");
+  if (!albums.length) { el.innerHTML = '<div style="text-align:center;padding:40px;color:rgba(255,255,255,0.3)">No data for this period</div>'; return; }
+  const maxVal = statsSort === "time" ? albums[0].total_ms : albums[0].play_count;
+  el.innerHTML = albums.map(a => {
+    const val = statsSort === "time" ? a.total_ms : a.play_count;
+    const pct = Math.max(3, (val / maxVal) * 100);
+    const img = a.album_image || "";
+    return `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;padding:8px 10px;border-radius:10px;position:relative;overflow:hidden">
+      <div style="position:absolute;left:0;top:0;bottom:0;width:${pct}%;background:rgba(29,185,84,0.06);border-radius:10px;z-index:0"></div>
+      <span style="font-size:13px;font-weight:800;color:rgba(255,255,255,0.2);width:28px;text-align:right;z-index:1">${a.rank}</span>
+      ${img ? `<img src="${img}" style="width:40px;height:40px;border-radius:8px;z-index:1">` : '<div style="width:40px;height:40px;border-radius:8px;background:rgba(255,255,255,0.06);z-index:1"></div>'}
+      <div style="flex:1;min-width:0;z-index:1">
+        <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(a.album_name)}</div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.4)">${esc(a.artist_name || "")} · ${a.unique_tracks} tracks</div>
+      </div>
+      <div style="text-align:right;flex-shrink:0;z-index:1">
+        <div style="font-size:14px;font-weight:800;color:#1DB954">${statsSort === "time" ? a.total_hours + "h" : a.play_count.toLocaleString()}</div>
+        <div style="font-size:10px;color:rgba(255,255,255,0.3)">${statsSort === "time" ? a.play_count + " plays" : a.total_hours + "h"}</div>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+function renderRecentListens(listens) {
+  const el = document.getElementById("stats-content");
+  if (!listens.length) { el.innerHTML = '<div style="text-align:center;padding:40px;color:rgba(255,255,255,0.3)">No recent listens</div>'; return; }
+  el.innerHTML = listens.map(l => {
+    const img = l.album_image || "";
+    const when = new Date(l.played_at);
+    const ago = formatAgo(when);
+    return `
+    <div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.03)">
+      ${img ? `<img src="${img}" style="width:36px;height:36px;border-radius:6px">` : '<div style="width:36px;height:36px;border-radius:6px;background:rgba(255,255,255,0.06)"></div>'}
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(l.track_name || "Unknown")}</div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.4)">${esc(l.artist_name || "")}${l.album_name ? ` · ${esc(l.album_name)}` : ""}</div>
+      </div>
+      <div style="text-align:right;flex-shrink:0">
+        <div style="font-size:11px;color:rgba(255,255,255,0.3)">${ago}</div>
+        <div style="font-size:10px;color:rgba(255,255,255,0.2)">${msToTime(l.ms_played || 0)}</div>
+      </div>
+      <div style="font-size:9px;padding:2px 6px;border-radius:4px;background:${l.source === 'live' ? 'rgba(29,185,84,0.1)' : 'rgba(255,255,255,0.05)'};color:${l.source === 'live' ? 'rgba(29,185,84,0.6)' : 'rgba(255,255,255,0.25)'};font-weight:600;text-transform:uppercase">${l.source}</div>
+    </div>`;
+  }).join("");
+}
+
+function formatAgo(date) {
+  const diff = Date.now() - date.getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 30) return `${days}d ago`;
+  if (days < 365) return `${Math.floor(days / 30)}mo ago`;
+  return `${Math.floor(days / 365)}y ago`;
+}
+
+async function importFiles(files) {
+  const statusEl = document.getElementById("import-status");
+  statusEl.style.display = "";
+  statusEl.textContent = `Processing ${files.length} file(s)...`;
+
+  let totalImported = 0, totalSkipped = 0, totalDuplicates = 0, totalEntries = 0;
+
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    statusEl.textContent = `Processing file ${i + 1}/${files.length}: ${file.name}...`;
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      if (!Array.isArray(data)) { statusEl.textContent += " (not an array, skipping)"; continue; }
+      totalEntries += data.length;
+
+      // Send in batches of 5000 to avoid timeout
+      for (let j = 0; j < data.length; j += 5000) {
+        const batch = data.slice(j, j + 5000);
+        statusEl.textContent = `File ${i + 1}/${files.length}: ${file.name} — ${j.toLocaleString()}/${data.length.toLocaleString()}...`;
+        const result = await api("/api/listens/import", {
+          method: "POST",
+          body: JSON.stringify({ data: batch }),
+        });
+        totalImported += result.imported;
+        totalSkipped += result.skipped;
+        totalDuplicates += result.duplicates;
+      }
+    } catch (e) {
+      statusEl.textContent = `Error with ${file.name}: ${e.message}`;
+      return;
+    }
+  }
+
+  statusEl.innerHTML = `<strong>Import complete!</strong> ${totalImported.toLocaleString()} listens imported, ${totalSkipped.toLocaleString()} skipped (podcasts/short plays), ${totalDuplicates.toLocaleString()} duplicates. Total entries: ${totalEntries.toLocaleString()}`;
+  document.getElementById("import-files").value = "";
+  loadStats();
 }
 
 // ═══════ GO ═══════

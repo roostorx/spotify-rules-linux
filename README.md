@@ -74,6 +74,20 @@ sudo systemctl start spotify-rules
 - Uses Spotify's embed page to read playlists, bypassing API restrictions on editorial playlists
 - Paste any Spotify playlist URL in the Tracker tab to start tracking
 
+### Listen History & Stats
+- Automatically records every song you play (30+ second threshold) — runs 24/7 server-side, no UI needed
+- Import Spotify extended streaming history (request from Privacy settings, supports `endsong_*.json` and `Streaming_History_Audio_*.json`)
+- Deduplicates on import — safe to re-import files, old and new data merges cleanly
+- Exclusion rules prevent unwanted listens from returning on re-import (e.g. fell asleep on repeat)
+- **Stats dashboard** with:
+  - Total plays, listen time (hours/days), unique tracks/artists/albums
+  - Top tracks, artists, and albums — sortable by play count or total listen time
+  - Time filtering: 7d / 30d / 90d / 6m / 1y / all time + custom date range
+  - Day streaks (consecutive days listening) — current + longest with dates
+  - Song streaks — most times on repeat + longest run of unique songs (60-min session gap)
+  - Recent listens feed with source badges (live vs import)
+  - Album art throughout, progress bars showing relative play counts
+
 ## Remote Access (SSH Tunnel)
 
 If the server is on a remote machine (e.g. `192.168.1.119`), access it from your Mac via SSH tunnel:

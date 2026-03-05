@@ -99,6 +99,37 @@ db.exec(`
     FOREIGN KEY (user_id) REFERENCES users(id)
   );
 
+  CREATE TABLE IF NOT EXISTS listens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    track_id TEXT,
+    track_name TEXT,
+    artist_name TEXT,
+    album_name TEXT,
+    album_image TEXT,
+    track_uri TEXT,
+    ms_played INTEGER DEFAULT 0,
+    played_at TEXT NOT NULL,
+    source TEXT DEFAULT 'live',
+    platform TEXT,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_listens_user_time ON listens(user_id, played_at);
+  CREATE INDEX IF NOT EXISTS idx_listens_user_track ON listens(user_id, track_id);
+  CREATE INDEX IF NOT EXISTS idx_listens_user_artist ON listens(user_id, artist_name);
+  CREATE INDEX IF NOT EXISTS idx_listens_user_album ON listens(user_id, album_name);
+
+  CREATE TABLE IF NOT EXISTS listen_exclusions (
+    user_id TEXT NOT NULL,
+    track_uri TEXT,
+    from_ts TEXT NOT NULL,
+    to_ts TEXT NOT NULL,
+    reason TEXT,
+    created_at INTEGER DEFAULT (unixepoch()),
+    PRIMARY KEY (user_id, track_uri, from_ts)
+  );
+
   CREATE TABLE IF NOT EXISTS tracked_playlists (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
@@ -206,6 +237,94 @@ const stmts = {
       (SELECT COUNT(*) FROM playlist_tracks WHERE user_id = ?) as total_entries
   `),
 
+  // Listens
+  insertListen: db.prepare(`
+    INSERT INTO listens (user_id, track_id, track_name, artist_name, album_name, album_image, track_uri, ms_played, played_at, source, platform)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)
+  `),
+  checkDuplicateListen: db.prepare(`
+    SELECT 1 FROM listens WHERE user_id = ? AND track_uri = ? AND played_at = ? LIMIT 1
+  `),
+  getListenStats: db.prepare(`
+    SELECT
+      COUNT(*) as total_listens,
+      SUM(ms_played) as total_ms,
+      COUNT(DISTINCT track_id) as unique_tracks,
+      COUNT(DISTINCT artist_name) as unique_artists,
+      COUNT(DISTINCT album_name) as unique_albums,
+      MIN(played_at) as first_listen,
+      MAX(played_at) as last_listen
+    FROM listens WHERE user_id = ? AND played_at BETWEEN ? AND ?
+  `),
+  getTopTracks: db.prepare(`
+    SELECT track_id, track_name, artist_name, album_name, album_image, track_uri,
+           COUNT(*) as play_count, SUM(ms_played) as total_ms
+    FROM listens WHERE user_id = ? AND played_at BETWEEN ? AND ? AND track_id IS NOT NULL
+    GROUP BY track_id ORDER BY COUNT(*) DESC LIMIT ?
+  `),
+  getTopTracksByTime: db.prepare(`
+    SELECT track_id, track_name, artist_name, album_name, album_image, track_uri,
+           COUNT(*) as play_count, SUM(ms_played) as total_ms
+    FROM listens WHERE user_id = ? AND played_at BETWEEN ? AND ? AND track_id IS NOT NULL
+    GROUP BY track_id ORDER BY SUM(ms_played) DESC LIMIT ?
+  `),
+  getTopArtists: db.prepare(`
+    SELECT artist_name,
+           COUNT(*) as play_count, SUM(ms_played) as total_ms,
+           COUNT(DISTINCT track_id) as unique_tracks,
+           COUNT(DISTINCT album_name) as unique_albums
+    FROM listens WHERE user_id = ? AND played_at BETWEEN ? AND ? AND artist_name IS NOT NULL
+    GROUP BY artist_name ORDER BY COUNT(*) DESC LIMIT ?
+  `),
+  getTopArtistsByTime: db.prepare(`
+    SELECT artist_name,
+           COUNT(*) as play_count, SUM(ms_played) as total_ms,
+           COUNT(DISTINCT track_id) as unique_tracks,
+           COUNT(DISTINCT album_name) as unique_albums
+    FROM listens WHERE user_id = ? AND played_at BETWEEN ? AND ? AND artist_name IS NOT NULL
+    GROUP BY artist_name ORDER BY SUM(ms_played) DESC LIMIT ?
+  `),
+  getTopAlbums: db.prepare(`
+    SELECT album_name, artist_name, album_image,
+           COUNT(*) as play_count, SUM(ms_played) as total_ms,
+           COUNT(DISTINCT track_id) as unique_tracks
+    FROM listens WHERE user_id = ? AND played_at BETWEEN ? AND ? AND album_name IS NOT NULL
+    GROUP BY album_name, artist_name ORDER BY COUNT(*) DESC LIMIT ?
+  `),
+  getTopAlbumsByTime: db.prepare(`
+    SELECT album_name, artist_name, album_image,
+           COUNT(*) as play_count, SUM(ms_played) as total_ms,
+           COUNT(DISTINCT track_id) as unique_tracks
+    FROM listens WHERE user_id = ? AND played_at BETWEEN ? AND ? AND album_name IS NOT NULL
+    GROUP BY album_name, artist_name ORDER BY SUM(ms_played) DESC LIMIT ?
+  `),
+  getListeningStreak: db.prepare(`
+    SELECT DATE(played_at) as day, COUNT(*) as plays, SUM(ms_played) as ms
+    FROM listens WHERE user_id = ? AND played_at BETWEEN ? AND ?
+    GROUP BY DATE(played_at) ORDER BY day
+  `),
+  getRecentListens: db.prepare(`
+    SELECT track_id, track_name, artist_name, album_name, album_image, track_uri, ms_played, played_at, source
+    FROM listens WHERE user_id = ? ORDER BY played_at DESC LIMIT ?
+  `),
+  getListenCount: db.prepare("SELECT COUNT(*) as count FROM listens WHERE user_id = ?"),
+  getConsecutiveListens: db.prepare(`
+    SELECT track_id, track_name, artist_name, played_at
+    FROM listens WHERE user_id = ? AND played_at BETWEEN ? AND ? AND track_id IS NOT NULL
+    ORDER BY played_at
+  `),
+  getArtistImage: db.prepare(`
+    SELECT album_image FROM listens
+    WHERE user_id = ? AND artist_name = ? AND album_image IS NOT NULL
+    ORDER BY played_at DESC LIMIT 1
+  `),
+
+  // Listen exclusions
+  insertExclusion: db.prepare("INSERT OR IGNORE INTO listen_exclusions (user_id, track_uri, from_ts, to_ts, reason) VALUES (?,?,?,?,?)"),
+  getExclusions: db.prepare("SELECT * FROM listen_exclusions WHERE user_id = ?"),
+  checkExclusion: db.prepare("SELECT 1 FROM listen_exclusions WHERE user_id = ? AND track_uri = ? AND ? BETWEEN from_ts AND to_ts LIMIT 1"),
+  deleteListenRange: db.prepare("DELETE FROM listens WHERE user_id = ? AND track_uri = ? AND played_at BETWEEN ? AND ?"),
+
   // Tracked playlists
   getTrackedPlaylists: db.prepare("SELECT * FROM tracked_playlists WHERE user_id = ? ORDER BY created_at DESC"),
   getTrackedPlaylist: db.prepare("SELECT * FROM tracked_playlists WHERE id = ? AND user_id = ?"),
@@ -308,7 +427,9 @@ function getMonitorState(userId) {
     monitorState.set(userId, {
       lastTrackId: null,
       armed: new Map(),   // ruleId -> { triggerTrackId, queued: bool, expectedTrackId }
-      fired: new Set(),   // "ruleId-triggerTrackId" 
+      fired: new Set(),   // "ruleId-triggerTrackId"
+      // Listen tracking state
+      currentListen: null, // { trackId, trackName, artist, album, albumImage, uri, startedAt, lastProgress }
     });
   }
   return monitorState.get(userId);
@@ -412,6 +533,40 @@ async function pollUser(user) {
       }
     }
 
+    // ── Listen Tracking ──
+    // Record listen when track changes or playback context changes significantly
+    if (trackChanged && ms.currentListen) {
+      const cl = ms.currentListen;
+      const msPlayed = cl.lastProgress || 0;
+      // Only record if listened for at least 30 seconds
+      if (msPlayed >= 30000) {
+        try {
+          stmts.insertListen.run(
+            user.id, cl.trackId, cl.trackName, cl.artist, cl.album,
+            cl.albumImage, cl.uri, msPlayed, cl.startedAt, "live", null
+          );
+        } catch {}
+      }
+      ms.currentListen = null;
+    }
+
+    // Start tracking new listen
+    if (!ms.currentListen || ms.currentListen.trackId !== currentId) {
+      ms.currentListen = {
+        trackId: currentId,
+        trackName: pb.item.name,
+        artist: pb.item.artists?.map(a => a.name).join(", ") || null,
+        album: pb.item.album?.name || null,
+        albumImage: pb.item.album?.images?.[1]?.url || pb.item.album?.images?.[0]?.url || null,
+        uri: pb.item.uri,
+        startedAt: new Date(Date.now() - progress).toISOString(),
+        lastProgress: progress,
+      };
+    } else {
+      // Update progress for current track
+      ms.currentListen.lastProgress = Math.max(ms.currentListen.lastProgress, progress);
+    }
+
     ms.lastTrackId = currentId;
 
   } catch (e) {
@@ -453,7 +608,7 @@ const pendingAuth = new Map();
 // EXPRESS APP
 // ═══════════════════════════════════════
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: "100mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
 // ── Auth: initiate (used by web UI) ──
@@ -1003,6 +1158,252 @@ app.get("/api/library/track/:id/playlists", requireUser, (req, res) => {
 app.get("/api/library/playlists", requireUser, (req, res) => {
   const playlists = stmts.getPlaylists.all(req.user.id);
   res.json(playlists);
+});
+
+// ═══════════════════════════════════════
+// LISTEN HISTORY API
+// ═══════════════════════════════════════
+
+function getDateRange(period, from, to) {
+  const now = new Date();
+  if (from && to) return { start: from, end: to };
+  switch (period) {
+    case "7d": return { start: new Date(now - 7 * 86400000).toISOString(), end: now.toISOString() };
+    case "30d": return { start: new Date(now - 30 * 86400000).toISOString(), end: now.toISOString() };
+    case "90d": return { start: new Date(now - 90 * 86400000).toISOString(), end: now.toISOString() };
+    case "6m": return { start: new Date(now - 182 * 86400000).toISOString(), end: now.toISOString() };
+    case "1y": return { start: new Date(now - 365 * 86400000).toISOString(), end: now.toISOString() };
+    default: return { start: "2000-01-01T00:00:00Z", end: now.toISOString() };
+  }
+}
+
+function computeStreak(days) {
+  if (!days.length) return { current: 0, longest: 0, longestStart: null, longestEnd: null };
+  let longest = 1, longestStart = 0, longestEnd = 0;
+  let current = 1, currentStart = days.length - 1;
+  for (let i = 1; i < days.length; i++) {
+    const prev = new Date(days[i - 1].day);
+    const curr = new Date(days[i].day);
+    const diff = (curr - prev) / 86400000;
+    if (diff === 1) {
+      current++;
+    } else {
+      if (current > longest) { longest = current; longestStart = currentStart; longestEnd = i - 1; }
+      current = 1;
+      currentStart = i;
+    }
+  }
+  if (current > longest) { longest = current; longestStart = currentStart; longestEnd = days.length - 1; }
+  // Check if current streak extends to today
+  const lastDay = new Date(days[days.length - 1].day);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const yesterday = new Date(today - 86400000);
+  const isActive = lastDay >= yesterday;
+  // Calculate actual current streak (from most recent day backwards)
+  let activeStreak = 1;
+  for (let i = days.length - 2; i >= 0; i--) {
+    const prev = new Date(days[i].day);
+    const curr = new Date(days[i + 1].day);
+    if ((curr - prev) / 86400000 === 1) activeStreak++;
+    else break;
+  }
+  return {
+    current: isActive ? activeStreak : 0,
+    longest,
+    longestStart: days[longestStart]?.day,
+    longestEnd: days[longestEnd]?.day,
+  };
+}
+
+// Compute song streaks with 60-min session gap
+const SESSION_GAP_MS = 60 * 60 * 1000; // 60 minutes
+
+function computeSongStreak(listens) {
+  if (!listens.length) return { longest_repeat: 0, repeat_track: null, longest_unique: 0 };
+
+  // Longest run of the SAME song back-to-back (within session)
+  let longestRepeat = 1, currentRepeat = 1;
+  let longestRepeatTrack = listens[0];
+  for (let i = 1; i < listens.length; i++) {
+    const gap = new Date(listens[i].played_at) - new Date(listens[i - 1].played_at);
+    if (gap > SESSION_GAP_MS) { currentRepeat = 1; continue; }
+    if (listens[i].track_id === listens[i - 1].track_id) {
+      currentRepeat++;
+      if (currentRepeat > longestRepeat) {
+        longestRepeat = currentRepeat;
+        longestRepeatTrack = listens[i];
+      }
+    } else {
+      currentRepeat = 1;
+    }
+  }
+
+  // Longest run of ALL UNIQUE songs (no repeats, within session)
+  let longestUnique = 0;
+  let seen = new Set();
+  let uStart = 0;
+  for (let i = 0; i < listens.length; i++) {
+    // Session break — reset
+    if (i > 0) {
+      const gap = new Date(listens[i].played_at) - new Date(listens[i - 1].played_at);
+      if (gap > SESSION_GAP_MS) { seen = new Set(); uStart = i; }
+    }
+    if (seen.has(listens[i].track_id)) {
+      while (seen.has(listens[i].track_id)) {
+        seen.delete(listens[uStart].track_id);
+        uStart++;
+      }
+    }
+    seen.add(listens[i].track_id);
+    if (seen.size > longestUnique) longestUnique = seen.size;
+  }
+
+  return {
+    longest_repeat: longestRepeat,
+    repeat_track: longestRepeatTrack ? { name: longestRepeatTrack.track_name, artist: longestRepeatTrack.artist_name } : null,
+    longest_unique: longestUnique,
+  };
+}
+
+// GET /api/listens/stats — overview stats
+app.get("/api/listens/stats", requireUser, (req, res) => {
+  const { period, from, to } = req.query;
+  const { start, end } = getDateRange(period, from, to);
+  const stats = stmts.getListenStats.get(req.user.id, start, end);
+  const total = stmts.getListenCount.get(req.user.id);
+
+  // Day streak calculation
+  const days = stmts.getListeningStreak.all(req.user.id, "2000-01-01T00:00:00Z", new Date().toISOString());
+  const streak = computeStreak(days);
+
+  // Song streak calculation
+  const listens = stmts.getConsecutiveListens.all(req.user.id, start, end);
+  const songStreak = computeSongStreak(listens);
+
+  res.json({
+    ...stats,
+    total_all_time: total.count,
+    total_hours: Math.round((stats?.total_ms || 0) / 3600000 * 10) / 10,
+    streak,
+    song_streak: songStreak,
+  });
+});
+
+// GET /api/listens/top/tracks
+app.get("/api/listens/top/tracks", requireUser, (req, res) => {
+  const { period, from, to, sort, limit: lim } = req.query;
+  const { start, end } = getDateRange(period, from, to);
+  const limit = Math.min(parseInt(lim) || 50, 200);
+  const tracks = sort === "time"
+    ? stmts.getTopTracksByTime.all(req.user.id, start, end, limit)
+    : stmts.getTopTracks.all(req.user.id, start, end, limit);
+  res.json(tracks.map((t, i) => ({ rank: i + 1, ...t, total_hours: Math.round(t.total_ms / 3600000 * 10) / 10 })));
+});
+
+// GET /api/listens/top/artists
+app.get("/api/listens/top/artists", requireUser, (req, res) => {
+  const { period, from, to, sort, limit: lim } = req.query;
+  const { start, end } = getDateRange(period, from, to);
+  const limit = Math.min(parseInt(lim) || 50, 200);
+  const artists = sort === "time"
+    ? stmts.getTopArtistsByTime.all(req.user.id, start, end, limit)
+    : stmts.getTopArtists.all(req.user.id, start, end, limit);
+  // Get an image for each artist from their most recent listen
+  const result = artists.map((a, i) => {
+    const img = stmts.getArtistImage.get(req.user.id, a.artist_name);
+    return { rank: i + 1, ...a, image: img?.album_image || null, total_hours: Math.round(a.total_ms / 3600000 * 10) / 10 };
+  });
+  res.json(result);
+});
+
+// GET /api/listens/top/albums
+app.get("/api/listens/top/albums", requireUser, (req, res) => {
+  const { period, from, to, sort, limit: lim } = req.query;
+  const { start, end } = getDateRange(period, from, to);
+  const limit = Math.min(parseInt(lim) || 50, 200);
+  const albums = sort === "time"
+    ? stmts.getTopAlbumsByTime.all(req.user.id, start, end, limit)
+    : stmts.getTopAlbums.all(req.user.id, start, end, limit);
+  res.json(albums.map((a, i) => ({ rank: i + 1, ...a, total_hours: Math.round(a.total_ms / 3600000 * 10) / 10 })));
+});
+
+// GET /api/listens/recent
+app.get("/api/listens/recent", requireUser, (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+  const listens = stmts.getRecentListens.all(req.user.id, limit);
+  res.json(listens);
+});
+
+// GET /api/listens/heatmap — daily listen counts for heatmap
+app.get("/api/listens/heatmap", requireUser, (req, res) => {
+  const { period, from, to } = req.query;
+  const { start, end } = getDateRange(period || "1y", from, to);
+  const days = stmts.getListeningStreak.all(req.user.id, start, end);
+  res.json(days);
+});
+
+// POST /api/listens/import — import Spotify extended streaming history
+app.post("/api/listens/import", requireUser, (req, res) => {
+  const { data } = req.body;
+  if (!Array.isArray(data)) {
+    return res.status(400).json({ error: "Expected { data: [...] } with array of streaming history entries" });
+  }
+
+  let imported = 0;
+  let skipped = 0;
+  let duplicates = 0;
+
+  const insertBatch = db.transaction((entries) => {
+    for (const entry of entries) {
+      // Skip podcasts
+      if (entry.episode_name || entry.spotify_episode_uri) { skipped++; continue; }
+      // Skip if no track info
+      if (!entry.master_metadata_track_name && !entry.spotify_track_uri) { skipped++; continue; }
+      // Skip very short plays (< 30 seconds)
+      if ((entry.ms_played || 0) < 30000) { skipped++; continue; }
+
+      const trackUri = entry.spotify_track_uri || null;
+      const trackId = trackUri ? trackUri.split(":").pop() : null;
+      const playedAt = entry.ts || null;
+      if (!playedAt) { skipped++; continue; }
+
+      // Check for exclusion
+      if (trackUri && stmts.checkExclusion.get(req.user.id, trackUri, playedAt)) {
+        skipped++;
+        continue;
+      }
+
+      // Check for duplicate
+      if (trackUri && stmts.checkDuplicateListen.get(req.user.id, trackUri, playedAt)) {
+        duplicates++;
+        continue;
+      }
+
+      stmts.insertListen.run(
+        req.user.id,
+        trackId,
+        entry.master_metadata_track_name || null,
+        entry.master_metadata_album_artist_name || null,
+        entry.master_metadata_album_album_name || null,
+        null, // album_image — not in export data
+        trackUri,
+        entry.ms_played || 0,
+        playedAt,
+        "import",
+        entry.platform || null
+      );
+      imported++;
+    }
+  });
+
+  try {
+    insertBatch(data);
+    console.log(`  📊 Import: ${imported} listens imported, ${skipped} skipped, ${duplicates} duplicates for ${req.user.display_name}`);
+    res.json({ imported, skipped, duplicates, total: data.length });
+  } catch (e) {
+    console.error("Import error:", e);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ═══════════════════════════════════════
