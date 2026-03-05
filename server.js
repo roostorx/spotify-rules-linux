@@ -146,6 +146,20 @@ db.exec(`
     FOREIGN KEY (user_id) REFERENCES users(id)
   );
 
+  CREATE TABLE IF NOT EXISTS smart_playlists (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT,
+    query_type TEXT NOT NULL,
+    spotify_playlist_id TEXT,
+    last_synced_at INTEGER,
+    track_count INTEGER DEFAULT 0,
+    enabled INTEGER DEFAULT 1,
+    created_at INTEGER DEFAULT (unixepoch()),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+  );
+
   CREATE TABLE IF NOT EXISTS tracked_playlist_tracks (
     tracked_id TEXT NOT NULL,
     track_id TEXT NOT NULL,
@@ -319,6 +333,24 @@ const stmts = {
     ORDER BY played_at DESC LIMIT 1
   `),
 
+  // Art backfill
+  getTracksWithoutArt: db.prepare(`
+    SELECT DISTINCT track_id FROM listens
+    WHERE user_id = ? AND track_id IS NOT NULL AND album_image IS NULL
+    LIMIT ?
+  `),
+  updateListenArt: db.prepare("UPDATE listens SET album_image = ? WHERE track_id = ? AND user_id = ?"),
+
+  // Listen search
+  searchListens: db.prepare(`
+    SELECT track_id, track_name, artist_name, album_name, album_image, track_uri,
+           COUNT(*) as play_count, SUM(ms_played) as total_ms
+    FROM listens WHERE user_id = ? AND played_at BETWEEN ? AND ?
+      AND (track_name LIKE ? OR artist_name LIKE ? OR album_name LIKE ?)
+      AND track_id IS NOT NULL
+    GROUP BY track_id ORDER BY COUNT(*) DESC LIMIT 50
+  `),
+
   // Listen exclusions
   insertExclusion: db.prepare("INSERT OR IGNORE INTO listen_exclusions (user_id, track_uri, from_ts, to_ts, reason) VALUES (?,?,?,?,?)"),
   getExclusions: db.prepare("SELECT * FROM listen_exclusions WHERE user_id = ?"),
@@ -359,6 +391,18 @@ const stmts = {
       completed_at=CASE WHEN excluded.status='done' THEN unixepoch() ELSE NULL END
   `),
   getSyncStatus: db.prepare("SELECT * FROM sync_status WHERE user_id = ?"),
+
+  // Smart playlists
+  getSmartPlaylists: db.prepare("SELECT * FROM smart_playlists WHERE user_id = ? ORDER BY created_at DESC"),
+  getSmartPlaylist: db.prepare("SELECT * FROM smart_playlists WHERE id = ? AND user_id = ?"),
+  insertSmartPlaylist: db.prepare("INSERT INTO smart_playlists (id, user_id, name, description, query_type, spotify_playlist_id) VALUES (?,?,?,?,?,?)"),
+  deleteSmartPlaylist: db.prepare("DELETE FROM smart_playlists WHERE id = ? AND user_id = ?"),
+  toggleSmartPlaylist: db.prepare("UPDATE smart_playlists SET enabled = ? WHERE id = ? AND user_id = ?"),
+  updateSmartPlaylistSync: db.prepare("UPDATE smart_playlists SET last_synced_at = unixepoch(), track_count = ? WHERE id = ?"),
+  getAllEnabledSmartPlaylists: db.prepare(`
+    SELECT sp.*, u.access_token, u.refresh_token, u.client_id, u.token_expires_at
+    FROM smart_playlists sp JOIN users u ON u.id = sp.user_id WHERE sp.enabled = 1
+  `),
 };
 
 // ═══════════════════════════════════════
@@ -930,6 +974,20 @@ app.get("/api/playback", requireUser, async (req, res) => {
   }
 });
 
+// POST /api/queue — add track to Spotify queue
+app.post("/api/queue", requireUser, async (req, res) => {
+  try {
+    const { track_id } = req.body;
+    if (!track_id) return res.status(400).json({ error: "track_id required" });
+    const uri = `spotify:track:${track_id}`;
+    const token = await ensureValidToken(req.user);
+    await spotifyFetch(`/me/player/queue?uri=${encodeURIComponent(uri)}`, token, { method: "POST" });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ═══════════════════════════════════════
 // PLAYLIST SYNC ENGINE
 // ═══════════════════════════════════════
@@ -1219,7 +1277,7 @@ function computeStreak(days) {
 const SESSION_GAP_MS = 60 * 60 * 1000; // 60 minutes
 
 function computeSongStreak(listens) {
-  if (!listens.length) return { longest_repeat: 0, repeat_track: null, longest_unique: 0 };
+  if (!listens.length) return { longest_repeat: 0, repeat_track: null, longest_session: 0, session_tracks: [], session_start: null, session_end: null };
 
   // Longest run of the SAME song back-to-back (within session)
   let longestRepeat = 1, currentRepeat = 1;
@@ -1238,30 +1296,49 @@ function computeSongStreak(listens) {
     }
   }
 
-  // Longest run of ALL UNIQUE songs (no repeats, within session)
-  let longestUnique = 0;
-  let seen = new Set();
-  let uStart = 0;
-  for (let i = 0; i < listens.length; i++) {
-    // Session break — reset
-    if (i > 0) {
-      const gap = new Date(listens[i].played_at) - new Date(listens[i - 1].played_at);
-      if (gap > SESSION_GAP_MS) { seen = new Set(); uStart = i; }
-    }
-    if (seen.has(listens[i].track_id)) {
-      while (seen.has(listens[i].track_id)) {
-        seen.delete(listens[uStart].track_id);
-        uStart++;
+  // Longest listening session (by song count, 60-min gap breaks it)
+  let longestSession = 1, sessionStart = 0, bestSessStart = 0, bestSessEnd = 0;
+  let currentSession = 1;
+  for (let i = 1; i < listens.length; i++) {
+    const gap = new Date(listens[i].played_at) - new Date(listens[i - 1].played_at);
+    if (gap > SESSION_GAP_MS) {
+      if (currentSession > longestSession) {
+        longestSession = currentSession;
+        bestSessStart = sessionStart;
+        bestSessEnd = i - 1;
       }
+      currentSession = 1;
+      sessionStart = i;
+    } else {
+      currentSession++;
     }
-    seen.add(listens[i].track_id);
-    if (seen.size > longestUnique) longestUnique = seen.size;
   }
+  if (currentSession > longestSession) {
+    longestSession = currentSession;
+    bestSessStart = sessionStart;
+    bestSessEnd = listens.length - 1;
+  }
+
+  const sessionTracks = listens.slice(bestSessStart, bestSessEnd + 1).map(l => ({
+    track_id: l.track_id,
+    name: l.track_name,
+    artist: l.artist_name,
+    played_at: l.played_at,
+  }));
+  const sessionStartTime = listens[bestSessStart]?.played_at || null;
+  const sessionEndTime = listens[bestSessEnd]?.played_at || null;
 
   return {
     longest_repeat: longestRepeat,
-    repeat_track: longestRepeatTrack ? { name: longestRepeatTrack.track_name, artist: longestRepeatTrack.artist_name } : null,
-    longest_unique: longestUnique,
+    repeat_track: longestRepeatTrack ? {
+      name: longestRepeatTrack.track_name,
+      artist: longestRepeatTrack.artist_name,
+      track_id: longestRepeatTrack.track_id,
+    } : null,
+    longest_session: longestSession,
+    session_tracks: sessionTracks,
+    session_start: sessionStartTime,
+    session_end: sessionEndTime,
   };
 }
 
@@ -1405,6 +1482,89 @@ app.post("/api/listens/import", requireUser, (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
+// GET /api/listens/search
+app.get("/api/listens/search", requireUser, (req, res) => {
+  const { q, period, from, to, sort } = req.query;
+  if (!q) return res.json([]);
+  const { start, end } = getDateRange(period, from, to);
+  const like = `%${q}%`;
+  const results = stmts.searchListens.all(req.user.id, start, end, like, like, like);
+  res.json(results.map((t, i) => ({
+    rank: i + 1, ...t,
+    total_hours: Math.round(t.total_ms / 3600000 * 10) / 10,
+  })));
+});
+
+// ═══════════════════════════════════════
+// ALBUM ART BACKFILL ENGINE
+// ═══════════════════════════════════════
+let artBackfillRunning = false;
+
+async function backfillAlbumArt() {
+  if (artBackfillRunning) return;
+  const users = stmts.getAllActiveUsers.all();
+  if (!users.length) return;
+
+  artBackfillRunning = true;
+  console.log("  🎨 Starting album art backfill...");
+
+  for (const user of users) {
+    try {
+      const token = await ensureValidToken(user);
+      const tracks = stmts.getTracksWithoutArt.all(user.id, 500);
+      if (!tracks.length) continue;
+
+      console.log(`  🎨 Backfilling art for ${tracks.length} tracks (${user.display_name})`);
+      let filled = 0;
+
+      // Batch fetch in groups of 50 (Spotify /tracks endpoint limit)
+      for (let i = 0; i < tracks.length; i += 50) {
+        const batch = tracks.slice(i, i + 50);
+        const ids = batch.map(t => t.track_id).join(",");
+        try {
+          const data = await spotifyFetch(`/tracks?ids=${ids}`, token);
+          if (data?.tracks) {
+            for (const t of data.tracks) {
+              if (!t) continue;
+              const img = t.album?.images?.[1]?.url || t.album?.images?.[0]?.url || null;
+              if (img) {
+                stmts.updateListenArt.run(img, t.id, user.id);
+                filled++;
+              }
+            }
+          }
+        } catch (e) {
+          if (e.message.includes("429")) {
+            console.log("  🎨 Rate limited, pausing backfill...");
+            await new Promise(r => setTimeout(r, 10000));
+            i -= 50; // retry batch
+            continue;
+          }
+          if (e.message.includes("401")) {
+            await refreshAccessToken(user);
+            break;
+          }
+        }
+        // Be nice to rate limits
+        await new Promise(r => setTimeout(r, 500));
+      }
+      console.log(`  🎨 Filled art for ${filled} tracks`);
+    } catch (e) {
+      console.error(`  🎨 Art backfill error: ${e.message}`);
+    }
+  }
+  artBackfillRunning = false;
+}
+
+// Run art backfill every 10 minutes
+let artBackfillInterval = null;
+function startArtBackfill() {
+  // First run after 30 seconds
+  setTimeout(backfillAlbumArt, 30000);
+  artBackfillInterval = setInterval(backfillAlbumArt, 10 * 60 * 1000);
+  console.log("  🎨 Album art backfill scheduled (every 10 min, 500 tracks/batch)");
+}
 
 // ═══════════════════════════════════════
 // PLAYLIST TRACKER ENGINE
@@ -1647,6 +1807,287 @@ app.get("/api/tracker/:id/tracks", requireUser, (req, res) => {
 });
 
 // ═══════════════════════════════════════
+// SMART PLAYLISTS ENGINE
+// ═══════════════════════════════════════
+
+const SMART_PLAYLIST_PRESETS = {
+  forgotten_bangers: {
+    name: "Forgotten Bangers",
+    description: "Played 10+ times in a year, but not once in the last 5 years",
+    query: (userId) => db.prepare(`
+      SELECT track_id, track_name, artist_name, track_uri, album_image,
+             COUNT(*) as play_count, MAX(played_at) as last_played
+      FROM listens WHERE user_id = ? AND track_id IS NOT NULL
+      GROUP BY track_id
+      HAVING COUNT(*) >= 10
+        AND MAX(played_at) < datetime('now', '-5 years')
+      ORDER BY play_count DESC LIMIT 200
+    `).all(userId),
+  },
+  one_hit_wonders: {
+    name: "One-Hit Wonders",
+    description: "Artists you played exactly once — hidden gems or missed connections",
+    query: (userId) => db.prepare(`
+      SELECT l.track_id, l.track_name, l.artist_name, l.track_uri, l.album_image
+      FROM listens l
+      JOIN (SELECT artist_name FROM listens WHERE user_id = ? AND track_id IS NOT NULL GROUP BY artist_name HAVING COUNT(*) = 1) a
+        ON l.artist_name = a.artist_name
+      WHERE l.user_id = ? AND l.track_id IS NOT NULL
+      GROUP BY l.track_id
+      ORDER BY l.played_at DESC LIMIT 200
+    `).all(userId, userId),
+  },
+  late_night_anthems: {
+    name: "Late Night Anthems",
+    description: "Your most-played tracks between midnight and 4 AM",
+    query: (userId) => db.prepare(`
+      SELECT track_id, track_name, artist_name, track_uri, album_image,
+             COUNT(*) as play_count
+      FROM listens WHERE user_id = ? AND track_id IS NOT NULL
+        AND CAST(strftime('%H', played_at) AS INTEGER) BETWEEN 0 AND 3
+      GROUP BY track_id HAVING COUNT(*) >= 2
+      ORDER BY play_count DESC LIMIT 200
+    `).all(userId),
+  },
+  on_repeat: {
+    name: "On Repeat Hall of Fame",
+    description: "Tracks you've played 3+ times in a single day",
+    query: (userId) => db.prepare(`
+      SELECT track_id, track_name, artist_name, track_uri, album_image,
+             MAX(daily_plays) as max_daily, COUNT(*) as total_plays
+      FROM (
+        SELECT track_id, track_name, artist_name, track_uri, album_image,
+               DATE(played_at) as day, COUNT(*) as daily_plays
+        FROM listens WHERE user_id = ? AND track_id IS NOT NULL
+        GROUP BY track_id, day HAVING COUNT(*) >= 3
+      ) GROUP BY track_id
+      ORDER BY max_daily DESC, total_plays DESC LIMIT 200
+    `).all(userId),
+  },
+  summer_anthems: {
+    name: "Summer Anthems",
+    description: "Your top plays from June through August, all years combined",
+    query: (userId) => db.prepare(`
+      SELECT track_id, track_name, artist_name, track_uri, album_image,
+             COUNT(*) as play_count
+      FROM listens WHERE user_id = ? AND track_id IS NOT NULL
+        AND CAST(strftime('%m', played_at) AS INTEGER) BETWEEN 6 AND 8
+      GROUP BY track_id HAVING COUNT(*) >= 3
+      ORDER BY play_count DESC LIMIT 200
+    `).all(userId),
+  },
+  deep_cuts: {
+    name: "Deep Cuts",
+    description: "Tracks from artists you love (50+ plays) but only heard 1-2 times",
+    query: (userId) => db.prepare(`
+      SELECT l.track_id, l.track_name, l.artist_name, l.track_uri, l.album_image,
+             COUNT(*) as play_count
+      FROM listens l
+      JOIN (SELECT artist_name FROM listens WHERE user_id = ? AND track_id IS NOT NULL GROUP BY artist_name HAVING COUNT(*) >= 50) a
+        ON l.artist_name = a.artist_name
+      WHERE l.user_id = ? AND l.track_id IS NOT NULL
+      GROUP BY l.track_id HAVING COUNT(*) <= 2
+      ORDER BY RANDOM() LIMIT 200
+    `).all(userId, userId),
+  },
+  throwback_era: {
+    name: "Throwback Era",
+    description: "Your heaviest rotation from 3-5 years ago",
+    query: (userId) => db.prepare(`
+      SELECT track_id, track_name, artist_name, track_uri, album_image,
+             COUNT(*) as play_count
+      FROM listens WHERE user_id = ? AND track_id IS NOT NULL
+        AND played_at BETWEEN datetime('now', '-5 years') AND datetime('now', '-3 years')
+      GROUP BY track_id
+      ORDER BY play_count DESC LIMIT 200
+    `).all(userId),
+  },
+  morning_motivation: {
+    name: "Morning Motivation",
+    description: "Your most-played tracks between 6-9 AM",
+    query: (userId) => db.prepare(`
+      SELECT track_id, track_name, artist_name, track_uri, album_image,
+             COUNT(*) as play_count
+      FROM listens WHERE user_id = ? AND track_id IS NOT NULL
+        AND CAST(strftime('%H', played_at) AS INTEGER) BETWEEN 6 AND 8
+      GROUP BY track_id HAVING COUNT(*) >= 2
+      ORDER BY play_count DESC LIMIT 200
+    `).all(userId),
+  },
+  marathon_tracks: {
+    name: "Marathon Tracks",
+    description: "Songs you've spent the most total time listening to",
+    query: (userId) => db.prepare(`
+      SELECT track_id, track_name, artist_name, track_uri, album_image,
+             COUNT(*) as play_count, SUM(ms_played) as total_ms
+      FROM listens WHERE user_id = ? AND track_id IS NOT NULL
+      GROUP BY track_id
+      ORDER BY SUM(ms_played) DESC LIMIT 200
+    `).all(userId),
+  },
+  comeback_kings: {
+    name: "Comeback Kings",
+    description: "Tracks with 6+ months of silence between plays — they keep coming back",
+    query: (userId) => db.prepare(`
+      WITH plays AS (
+        SELECT track_id, track_name, artist_name, track_uri, album_image, played_at,
+               LAG(played_at) OVER (PARTITION BY track_id ORDER BY played_at) as prev_play
+        FROM listens WHERE user_id = ? AND track_id IS NOT NULL
+      )
+      SELECT track_id, track_name, artist_name, track_uri, album_image,
+             MAX(JULIANDAY(played_at) - JULIANDAY(prev_play)) as max_gap_days,
+             COUNT(*) as play_count
+      FROM plays WHERE prev_play IS NOT NULL
+      GROUP BY track_id HAVING max_gap_days >= 180 AND play_count >= 3
+      ORDER BY max_gap_days DESC LIMIT 200
+    `).all(userId),
+  },
+};
+
+// Sync a single smart playlist to Spotify
+async function syncSmartPlaylist(sp) {
+  try {
+    const user = { id: sp.user_id, access_token: sp.access_token, refresh_token: sp.refresh_token, client_id: sp.client_id, token_expires_at: sp.token_expires_at };
+    const token = await ensureValidToken(user);
+    const preset = SMART_PLAYLIST_PRESETS[sp.query_type];
+    if (!preset) return;
+
+    const tracks = preset.query(sp.user_id);
+    if (!tracks.length) { stmts.updateSmartPlaylistSync.run(0, sp.id); return; }
+
+    const uris = tracks.map(t => t.track_uri || `spotify:track:${t.track_id}`).filter(Boolean);
+    if (!uris.length) { stmts.updateSmartPlaylistSync.run(0, sp.id); return; }
+
+    // Create Spotify playlist if it doesn't exist yet
+    let playlistId = sp.spotify_playlist_id;
+    if (!playlistId) {
+      const me = await spotifyFetch("/me", token);
+      const created = await spotifyFetch(`/users/${me.id}/playlists`, token, {
+        method: "POST",
+        body: JSON.stringify({ name: `${sp.name}`, description: sp.description || "", public: false }),
+      });
+      playlistId = created.id;
+      db.prepare("UPDATE smart_playlists SET spotify_playlist_id = ? WHERE id = ?").run(playlistId, sp.id);
+    }
+
+    // Replace all tracks (smart playlists are regenerated, not additive)
+    await spotifyFetch(`/playlists/${playlistId}/tracks`, token, {
+      method: "PUT",
+      body: JSON.stringify({ uris: uris.slice(0, 100) }),
+    });
+    // Add remaining in batches of 100
+    for (let i = 100; i < uris.length; i += 100) {
+      await spotifyFetch(`/playlists/${playlistId}/tracks`, token, {
+        method: "POST",
+        body: JSON.stringify({ uris: uris.slice(i, i + 100) }),
+      });
+    }
+
+    // Update description with track count and sync time
+    await spotifyFetch(`/playlists/${playlistId}`, token, {
+      method: "PUT",
+      body: JSON.stringify({ description: `${sp.description || ""} | ${uris.length} tracks | Updated ${new Date().toLocaleDateString()}` }),
+    });
+
+    stmts.updateSmartPlaylistSync.run(uris.length, sp.id);
+    console.log(`  🧠 Smart playlist "${sp.name}" synced: ${uris.length} tracks`);
+  } catch (e) {
+    console.error(`  ❌ Smart playlist "${sp.name}" sync failed:`, e.message);
+  }
+}
+
+// GET /api/smart-playlists/presets — available preset definitions
+app.get("/api/smart-playlists/presets", (req, res) => {
+  res.json(Object.entries(SMART_PLAYLIST_PRESETS).map(([key, p]) => ({
+    key,
+    name: p.name,
+    description: p.description,
+  })));
+});
+
+// GET /api/smart-playlists — user's smart playlists
+app.get("/api/smart-playlists", requireUser, (req, res) => {
+  const playlists = stmts.getSmartPlaylists.all(req.user.id);
+  res.json(playlists.map(p => ({ ...p, enabled: !!p.enabled })));
+});
+
+// POST /api/smart-playlists — create a smart playlist from a preset
+app.post("/api/smart-playlists", requireUser, async (req, res) => {
+  const { preset_key } = req.body;
+  if (!SMART_PLAYLIST_PRESETS[preset_key]) return res.status(400).json({ error: "Unknown preset" });
+  const preset = SMART_PLAYLIST_PRESETS[preset_key];
+  const id = crypto.randomUUID();
+
+  stmts.insertSmartPlaylist.run(id, req.user.id, preset.name, preset.description, preset_key, null);
+
+  // Immediately sync it
+  const sp = {
+    ...stmts.getSmartPlaylist.get(id, req.user.id),
+    access_token: req.user.access_token,
+    refresh_token: req.user.refresh_token,
+    client_id: req.user.client_id,
+    token_expires_at: req.user.token_expires_at,
+  };
+  await syncSmartPlaylist(sp);
+
+  const updated = stmts.getSmartPlaylist.get(id, req.user.id);
+  res.json({ ...updated, enabled: !!updated.enabled });
+});
+
+// DELETE /api/smart-playlists/:id
+app.delete("/api/smart-playlists/:id", requireUser, (req, res) => {
+  stmts.deleteSmartPlaylist.run(req.params.id, req.user.id);
+  res.json({ ok: true });
+});
+
+// POST /api/smart-playlists/:id/sync — manually trigger sync
+app.post("/api/smart-playlists/:id/sync", requireUser, async (req, res) => {
+  const sp = stmts.getSmartPlaylist.get(req.params.id, req.user.id);
+  if (!sp) return res.status(404).json({ error: "not found" });
+
+  const spWithUser = {
+    ...sp,
+    access_token: req.user.access_token,
+    refresh_token: req.user.refresh_token,
+    client_id: req.user.client_id,
+    token_expires_at: req.user.token_expires_at,
+  };
+  await syncSmartPlaylist(spWithUser);
+  const updated = stmts.getSmartPlaylist.get(req.params.id, req.user.id);
+  res.json({ ...updated, enabled: !!updated.enabled });
+});
+
+// POST /api/smart-playlists/:id/preview — preview tracks without syncing
+app.post("/api/smart-playlists/:id/preview", requireUser, (req, res) => {
+  const sp = stmts.getSmartPlaylist.get(req.params.id, req.user.id);
+  if (!sp) return res.status(404).json({ error: "not found" });
+  const preset = SMART_PLAYLIST_PRESETS[sp.query_type];
+  if (!preset) return res.status(400).json({ error: "Unknown preset" });
+  const tracks = preset.query(req.user.id);
+  res.json(tracks.slice(0, 50));
+});
+
+// GET /api/smart-playlists/preview/:preset_key — preview before creating
+app.get("/api/smart-playlists/preview/:preset_key", requireUser, (req, res) => {
+  const preset = SMART_PLAYLIST_PRESETS[req.params.preset_key];
+  if (!preset) return res.status(400).json({ error: "Unknown preset" });
+  const tracks = preset.query(req.user.id);
+  res.json({ count: tracks.length, tracks: tracks.slice(0, 20) });
+});
+
+// Background sync: refresh all smart playlists every 24 hours
+let smartPlaylistInterval;
+function startSmartPlaylistSync() {
+  smartPlaylistInterval = setInterval(async () => {
+    const playlists = stmts.getAllEnabledSmartPlaylists.all();
+    for (const sp of playlists) {
+      await syncSmartPlaylist(sp);
+      await new Promise(r => setTimeout(r, 2000)); // rate limit
+    }
+  }, 24 * 60 * 60 * 1000); // every 24 hours
+}
+
+// ═══════════════════════════════════════
 // START
 // ═══════════════════════════════════════
 app.listen(PORT, "0.0.0.0", () => {
@@ -1658,6 +2099,8 @@ app.listen(PORT, "0.0.0.0", () => {
   // Start the monitoring engine
   startMonitoring();
   startTracker();
+  startArtBackfill();
+  startSmartPlaylistSync();
 
   const userCount = stmts.getAllActiveUsers.all().length;
   if (userCount > 0) {

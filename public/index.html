@@ -90,6 +90,7 @@
       <button onclick="switchTab('library')" id="tab-library" class="tab-btn" style="padding:10px 20px;border:none;background:none;color:rgba(255,255,255,0.4);font-size:14px;font-weight:700;cursor:pointer;border-bottom:2px solid transparent;font-family:inherit;margin-bottom:-1px">📚 Library</button>
       <button onclick="switchTab('tracker')" id="tab-tracker" class="tab-btn" style="padding:10px 20px;border:none;background:none;color:rgba(255,255,255,0.4);font-size:14px;font-weight:700;cursor:pointer;border-bottom:2px solid transparent;font-family:inherit;margin-bottom:-1px">📋 Tracker</button>
       <button onclick="switchTab('stats')" id="tab-stats" class="tab-btn" style="padding:10px 20px;border:none;background:none;color:rgba(255,255,255,0.4);font-size:14px;font-weight:700;cursor:pointer;border-bottom:2px solid transparent;font-family:inherit;margin-bottom:-1px">📊 Stats</button>
+      <button onclick="switchTab('smart')" id="tab-smart" class="tab-btn" style="padding:10px 20px;border:none;background:none;color:rgba(255,255,255,0.4);font-size:14px;font-weight:700;cursor:pointer;border-bottom:2px solid transparent;font-family:inherit;margin-bottom:-1px">🧠 Smart</button>
     </div>
   </div>
 
@@ -183,8 +184,13 @@
       <button onclick="setStatsSort('time')" id="stats-sort-time" class="btn btn-sm btn-outline" style="padding:4px 12px">Time</button>
     </div>
 
+    <!-- Search -->
+    <div style="margin-bottom:16px">
+      <input id="stats-search" type="text" class="input" placeholder="Search tracks, artists, or albums..." />
+    </div>
+
     <!-- Sub-tabs -->
-    <div style="display:flex;gap:4px;margin-bottom:16px;border-bottom:1px solid rgba(255,255,255,0.06)">
+    <div id="stats-subtabs" style="display:flex;gap:4px;margin-bottom:16px;border-bottom:1px solid rgba(255,255,255,0.06)">
       <button onclick="setStatsView('tracks')" id="stats-view-tracks" style="padding:8px 16px;border:none;background:none;color:#1DB954;font-size:13px;font-weight:700;cursor:pointer;border-bottom:2px solid #1DB954;font-family:inherit;margin-bottom:-1px">Tracks</button>
       <button onclick="setStatsView('artists')" id="stats-view-artists" style="padding:8px 16px;border:none;background:none;color:rgba(255,255,255,0.4);font-size:13px;font-weight:700;cursor:pointer;border-bottom:2px solid transparent;font-family:inherit;margin-bottom:-1px">Artists</button>
       <button onclick="setStatsView('albums')" id="stats-view-albums" style="padding:8px 16px;border:none;background:none;color:rgba(255,255,255,0.4);font-size:13px;font-weight:700;cursor:pointer;border-bottom:2px solid transparent;font-family:inherit;margin-bottom:-1px">Albums</button>
@@ -193,6 +199,22 @@
 
     <!-- Content -->
     <div id="stats-content"></div>
+  </div>
+
+  <!-- SMART PLAYLISTS TAB -->
+  <div id="tab-content-smart" style="display:none;max-width:720px;margin:0 auto;padding:24px 20px">
+    <div class="card" style="margin-bottom:20px">
+      <div style="display:flex;align-items:center;gap:14px">
+        <div style="font-size:28px">🧠</div>
+        <div>
+          <div style="font-size:16px;font-weight:700">Smart Playlists</div>
+          <div style="font-size:13px;color:rgba(255,255,255,0.5);margin-top:2px">Auto-generated playlists from your listening history</div>
+        </div>
+      </div>
+    </div>
+    <div id="smart-my-playlists" style="margin-bottom:24px"></div>
+    <div style="font-size:14px;font-weight:700;color:rgba(255,255,255,0.5);margin-bottom:12px;text-transform:uppercase;letter-spacing:0.05em">Available Presets</div>
+    <div id="smart-presets"></div>
   </div>
 
   <!-- LIBRARY TAB -->
@@ -688,6 +710,23 @@ window.selectAction = function(i) {
   renderBuildActions();
 };
 
+window.addToQueue = async function(trackId, el) {
+  if (!trackId) return;
+  const orig = el.innerHTML;
+  el.innerHTML = "...";
+  el.style.pointerEvents = "none";
+  try {
+    await api("/api/queue", { method: "POST", body: JSON.stringify({ track_id: trackId }) });
+    el.innerHTML = "\u2713";
+    el.style.color = "#1DB954";
+    setTimeout(() => { el.innerHTML = orig; el.style.color = ""; el.style.pointerEvents = ""; }, 1500);
+  } catch (e) {
+    el.innerHTML = "\u2717";
+    el.style.color = "#ef4444";
+    setTimeout(() => { el.innerHTML = orig; el.style.color = ""; el.style.pointerEvents = ""; }, 2000);
+  }
+};
+
 async function saveRule() {
   if (!buildTrigger || !buildActions.length) return;
   try {
@@ -732,6 +771,7 @@ function switchTab(tab) {
   document.getElementById("tab-content-library").style.display = tab === "library" ? "" : "none";
   document.getElementById("tab-content-tracker").style.display = tab === "tracker" ? "" : "none";
   document.getElementById("tab-content-stats").style.display = tab === "stats" ? "" : "none";
+  document.getElementById("tab-content-smart").style.display = tab === "smart" ? "" : "none";
 
   if (tab === "library") {
     loadLibrary();
@@ -739,6 +779,8 @@ function switchTab(tab) {
     loadTrackedPlaylists();
   } else if (tab === "stats") {
     loadStats();
+  } else if (tab === "smart") {
+    loadSmartPlaylists();
   }
 }
 
@@ -1193,6 +1235,8 @@ function statsParams() {
   return `period=${statsPeriod}`;
 }
 
+let statsSearchTimer = null;
+
 async function loadStats() {
   try {
     const stats = await api(`/api/listens/stats?${statsParams()}`);
@@ -1200,7 +1244,35 @@ async function loadStats() {
     document.getElementById("stats-listen-count").textContent =
       `${(stats.total_all_time || 0).toLocaleString()} total listens tracked`;
   } catch {}
+
+  // Bind search
+  const searchInput = document.getElementById("stats-search");
+  searchInput.oninput = () => {
+    clearTimeout(statsSearchTimer);
+    statsSearchTimer = setTimeout(() => {
+      const q = searchInput.value.trim();
+      if (q) loadStatsSearch(q);
+      else loadStatsContent();
+    }, 400);
+  };
+
   loadStatsContent();
+}
+
+async function loadStatsSearch(q) {
+  const el = document.getElementById("stats-content");
+  el.innerHTML = '<div style="text-align:center;padding:20px;color:rgba(255,255,255,0.3)">Searching...</div>';
+  document.getElementById("stats-subtabs").style.display = "none";
+  try {
+    const results = await api(`/api/listens/search?q=${encodeURIComponent(q)}&${statsParams()}&sort=${statsSort}`);
+    if (!results.length) {
+      el.innerHTML = '<div style="text-align:center;padding:40px;color:rgba(255,255,255,0.3)">No results</div>';
+      return;
+    }
+    renderTopTracks(results);
+  } catch (e) {
+    el.innerHTML = `<div style="text-align:center;padding:20px;color:rgba(255,255,255,0.3)">${esc(e.message)}</div>`;
+  }
 }
 
 function renderStatsOverview(s) {
@@ -1249,17 +1321,36 @@ function renderStatsOverview(s) {
       <div style="flex:1;padding:12px;border-radius:10px;background:rgba(147,51,234,0.06);border:1px solid rgba(147,51,234,0.15);text-align:center">
         <div style="font-size:20px;font-weight:800;color:#9333EA">${s.song_streak.longest_repeat}x</div>
         <div style="font-size:10px;color:rgba(255,255,255,0.4);font-weight:600;text-transform:uppercase;letter-spacing:0.06em">Song on Repeat</div>
-        ${s.song_streak.repeat_track ? `<div style="font-size:9px;color:rgba(255,255,255,0.25);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(s.song_streak.repeat_track.name)}</div>` : ""}
+        ${s.song_streak.repeat_track ? `<a href="https://open.spotify.com/track/${s.song_streak.repeat_track.track_id}" target="_blank" style="font-size:9px;color:rgba(147,51,234,0.7);margin-top:2px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-decoration:none">${esc(s.song_streak.repeat_track.name)} — ${esc(s.song_streak.repeat_track.artist)}</a>` : ""}
       </div>
-      <div style="flex:1;padding:12px;border-radius:10px;background:rgba(147,51,234,0.06);border:1px solid rgba(147,51,234,0.15);text-align:center">
-        <div style="font-size:20px;font-weight:800;color:#9333EA">${s.song_streak.longest_unique}</div>
-        <div style="font-size:10px;color:rgba(255,255,255,0.4);font-weight:600;text-transform:uppercase;letter-spacing:0.06em">Unique in a Row</div>
+      <div style="flex:1;padding:12px;border-radius:10px;background:rgba(147,51,234,0.06);border:1px solid rgba(147,51,234,0.15);text-align:center;cursor:pointer" onclick="toggleUniqueStreak()">
+        <div style="font-size:20px;font-weight:800;color:#9333EA">${s.song_streak.longest_session} songs</div>
+        <div style="font-size:10px;color:rgba(255,255,255,0.4);font-weight:600;text-transform:uppercase;letter-spacing:0.06em">Track Streak</div>
+        ${s.song_streak.session_start ? `<div style="font-size:9px;color:rgba(255,255,255,0.25);margin-top:2px">${new Date(s.song_streak.session_start).toLocaleDateString()} ${new Date(s.song_streak.session_start).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}${s.song_streak.session_end ? ` — ${new Date(s.song_streak.session_end).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}` : ""}</div>` : ""}
+        <div style="font-size:9px;color:rgba(147,51,234,0.5);margin-top:1px">click to see tracks</div>
       </div>
+    </div>
+    <div id="unique-streak-list" style="display:none;margin-top:10px;max-height:300px;overflow-y:auto;border-radius:10px;background:rgba(147,51,234,0.03);border:1px solid rgba(147,51,234,0.1);padding:10px">
+      ${(s.song_streak.session_tracks || []).map((t, i) => `<div style="display:flex;align-items:center;gap:8px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.03)">
+        <span style="font-size:10px;color:rgba(255,255,255,0.2);width:24px;text-align:right">${i + 1}</span>
+        <a href="https://open.spotify.com/track/${t.track_id}" target="_blank" style="flex:1;min-width:0;text-decoration:none">
+          <span style="font-size:12px;font-weight:500;color:rgba(255,255,255,0.7)">${esc(t.name)}</span>
+          <span style="font-size:11px;color:rgba(255,255,255,0.3)"> — ${esc(t.artist)}</span>
+        </a>
+        <span style="font-size:9px;color:rgba(255,255,255,0.15)">${t.played_at ? new Date(t.played_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : ""}</span>
+        <span onclick="event.stopPropagation();addToQueue('${t.track_id}', this)" style="width:20px;height:20px;border-radius:50%;background:rgba(147,51,234,0.15);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;font-size:12px;color:rgba(147,51,234,0.7);font-weight:700" title="Add to queue">+</span>
+      </div>`).join("")}
     </div>` : ""}
   `;
 }
 
+function toggleUniqueStreak() {
+  const el = document.getElementById("unique-streak-list");
+  if (el) el.style.display = el.style.display === "none" ? "" : "none";
+}
+
 async function loadStatsContent() {
+  document.getElementById("stats-subtabs").style.display = "";
   const el = document.getElementById("stats-content");
   el.innerHTML = '<div style="text-align:center;padding:20px;color:rgba(255,255,255,0.3)">Loading...</div>';
 
@@ -1295,6 +1386,7 @@ function renderTopTracks(tracks) {
         <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.track_name || "Unknown")}</div>
         <div style="font-size:11px;color:rgba(255,255,255,0.4)">${esc(t.artist_name || "")}${t.album_name ? ` · ${esc(t.album_name)}` : ""}</div>
       </div>
+      <div onclick="addToQueue('${t.track_id}', this)" style="width:28px;height:28px;border-radius:50%;background:rgba(29,185,84,0.1);display:flex;align-items:center;justify-content:center;cursor:pointer;z-index:1;flex-shrink:0;font-size:16px;color:rgba(29,185,84,0.6);font-weight:700" title="Add to queue">+</div>
       <div style="text-align:right;flex-shrink:0;z-index:1">
         <div style="font-size:14px;font-weight:800;color:#1DB954">${statsSort === "time" ? t.total_hours + "h" : t.play_count.toLocaleString()}</div>
         <div style="font-size:10px;color:rgba(255,255,255,0.3)">${statsSort === "time" ? t.play_count + " plays" : t.total_hours + "h"}</div>
@@ -1367,6 +1459,7 @@ function renderRecentListens(listens) {
         <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(l.track_name || "Unknown")}</div>
         <div style="font-size:11px;color:rgba(255,255,255,0.4)">${esc(l.artist_name || "")}${l.album_name ? ` · ${esc(l.album_name)}` : ""}</div>
       </div>
+      <div onclick="addToQueue('${l.track_id}', this)" style="width:24px;height:24px;border-radius:50%;background:rgba(29,185,84,0.1);display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;font-size:14px;color:rgba(29,185,84,0.6);font-weight:700" title="Add to queue">+</div>
       <div style="text-align:right;flex-shrink:0">
         <div style="font-size:11px;color:rgba(255,255,255,0.3)">${ago}</div>
         <div style="font-size:10px;color:rgba(255,255,255,0.2)">${msToTime(l.ms_played || 0)}</div>
@@ -1426,6 +1519,149 @@ async function importFiles(files) {
   statusEl.innerHTML = `<strong>Import complete!</strong> ${totalImported.toLocaleString()} listens imported, ${totalSkipped.toLocaleString()} skipped (podcasts/short plays), ${totalDuplicates.toLocaleString()} duplicates. Total entries: ${totalEntries.toLocaleString()}`;
   document.getElementById("import-files").value = "";
   loadStats();
+}
+
+// ═══════ SMART PLAYLISTS ═══════
+let smartPresets = [];
+let smartPlaylists = [];
+
+async function loadSmartPlaylists() {
+  try {
+    const [presets, playlists] = await Promise.all([
+      api("/api/smart-playlists/presets"),
+      api("/api/smart-playlists"),
+    ]);
+    smartPresets = presets;
+    smartPlaylists = playlists;
+    renderSmartPlaylists();
+    renderSmartPresets();
+  } catch (e) {
+    console.error("Failed to load smart playlists:", e);
+  }
+}
+
+function renderSmartPlaylists() {
+  const el = document.getElementById("smart-my-playlists");
+  if (!smartPlaylists.length) {
+    el.innerHTML = '<div style="text-align:center;padding:24px;color:rgba(255,255,255,0.3);font-size:13px">No smart playlists yet — pick a preset below to get started</div>';
+    return;
+  }
+  el.innerHTML = smartPlaylists.map(p => `
+    <div class="card" style="margin-bottom:10px">
+      <div style="display:flex;align-items:center;gap:12px">
+        <div style="font-size:24px">🧠</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:14px;font-weight:700">${esc(p.name)}</div>
+          <div style="font-size:11px;color:rgba(255,255,255,0.4);margin-top:2px">${esc(p.description || "")}</div>
+          <div style="font-size:10px;color:rgba(255,255,255,0.25);margin-top:4px">
+            ${p.track_count} tracks${p.last_synced_at ? ` · synced ${new Date(p.last_synced_at * 1000).toLocaleDateString()}` : ""}
+            ${p.spotify_playlist_id ? ` · <a href="https://open.spotify.com/playlist/${p.spotify_playlist_id}" target="_blank" style="color:#1DB954;text-decoration:none">Open in Spotify</a>` : ""}
+          </div>
+        </div>
+        <div style="display:flex;gap:6px;flex-shrink:0">
+          <button onclick="syncSmartPlaylist('${p.id}')" class="btn btn-sm" style="background:rgba(29,185,84,0.15);color:#1DB954;border:none;padding:6px 12px" title="Sync now">Sync</button>
+          <button onclick="previewSmartPlaylist('${p.id}')" class="btn btn-sm btn-outline" style="padding:6px 10px" title="Preview tracks">Preview</button>
+          <button onclick="deleteSmartPlaylist('${p.id}')" class="btn btn-sm" style="background:rgba(239,68,68,0.1);color:#ef4444;border:none;padding:6px 10px" title="Delete">X</button>
+        </div>
+      </div>
+      <div id="smart-preview-${p.id}" style="display:none;margin-top:12px;max-height:300px;overflow-y:auto"></div>
+    </div>
+  `).join("");
+}
+
+function renderSmartPresets() {
+  const el = document.getElementById("smart-presets");
+  const activeKeys = new Set(smartPlaylists.map(p => p.query_type));
+  el.innerHTML = smartPresets.map(p => {
+    const active = activeKeys.has(p.key);
+    return `
+    <div class="card" style="margin-bottom:8px;opacity:${active ? 0.5 : 1}">
+      <div style="display:flex;align-items:center;gap:12px">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;font-weight:700">${esc(p.name)}</div>
+          <div style="font-size:11px;color:rgba(255,255,255,0.4);margin-top:2px">${esc(p.description)}</div>
+        </div>
+        <div style="display:flex;gap:6px;flex-shrink:0">
+          <button onclick="previewPreset('${p.key}', this)" class="btn btn-sm btn-outline" style="padding:6px 10px">Preview</button>
+          ${active
+            ? '<span style="font-size:11px;color:rgba(255,255,255,0.3);padding:6px 10px">Added</span>'
+            : `<button onclick="createSmartPlaylist('${p.key}', this)" class="btn btn-sm" style="background:rgba(29,185,84,0.15);color:#1DB954;border:none;padding:6px 12px">Create</button>`}
+        </div>
+      </div>
+      <div id="smart-preset-preview-${p.key}" style="display:none;margin-top:12px;max-height:200px;overflow-y:auto"></div>
+    </div>`;
+  }).join("");
+}
+
+window.createSmartPlaylist = async function(presetKey, btn) {
+  btn.textContent = "Creating...";
+  btn.disabled = true;
+  try {
+    const result = await api("/api/smart-playlists", { method: "POST", body: JSON.stringify({ preset_key: presetKey }) });
+    smartPlaylists.unshift(result);
+    renderSmartPlaylists();
+    renderSmartPresets();
+  } catch (e) {
+    btn.textContent = "Failed";
+    setTimeout(() => { btn.textContent = "Create"; btn.disabled = false; }, 2000);
+  }
+};
+
+window.deleteSmartPlaylist = async function(id) {
+  if (!confirm("Delete this smart playlist? (The Spotify playlist will remain)")) return;
+  try {
+    await api(`/api/smart-playlists/${id}`, { method: "DELETE" });
+    smartPlaylists = smartPlaylists.filter(p => p.id !== id);
+    renderSmartPlaylists();
+    renderSmartPresets();
+  } catch (e) { console.error(e); }
+};
+
+window.syncSmartPlaylist = async function(id) {
+  try {
+    const result = await api(`/api/smart-playlists/${id}/sync`, { method: "POST" });
+    const idx = smartPlaylists.findIndex(p => p.id === id);
+    if (idx >= 0) smartPlaylists[idx] = result;
+    renderSmartPlaylists();
+  } catch (e) { console.error(e); }
+};
+
+window.previewSmartPlaylist = async function(id) {
+  const el = document.getElementById(`smart-preview-${id}`);
+  if (el.style.display !== "none") { el.style.display = "none"; return; }
+  el.innerHTML = '<div style="padding:10px;color:rgba(255,255,255,0.3)">Loading...</div>';
+  el.style.display = "";
+  try {
+    const tracks = await api(`/api/smart-playlists/${id}/preview`, { method: "POST" });
+    el.innerHTML = renderSmartTrackList(tracks);
+  } catch (e) { el.innerHTML = `<div style="color:#ef4444">${e.message}</div>`; }
+};
+
+window.previewPreset = async function(key, btn) {
+  const el = document.getElementById(`smart-preset-preview-${key}`);
+  if (el.style.display !== "none") { el.style.display = "none"; return; }
+  el.innerHTML = '<div style="padding:10px;color:rgba(255,255,255,0.3)">Loading...</div>';
+  el.style.display = "";
+  try {
+    const data = await api(`/api/smart-playlists/preview/${key}`);
+    el.innerHTML = `<div style="font-size:11px;color:rgba(255,255,255,0.3);margin-bottom:8px">${data.count} tracks found</div>` + renderSmartTrackList(data.tracks);
+  } catch (e) { el.innerHTML = `<div style="color:#ef4444">${e.message}</div>`; }
+};
+
+function renderSmartTrackList(tracks) {
+  if (!tracks.length) return '<div style="color:rgba(255,255,255,0.3);padding:8px">No tracks match this criteria yet</div>';
+  return tracks.map((t, i) => `
+    <div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.03)">
+      <span style="font-size:10px;color:rgba(255,255,255,0.2);width:20px;text-align:right">${i + 1}</span>
+      ${t.album_image ? `<img src="${t.album_image}" style="width:28px;height:28px;border-radius:4px">` : ""}
+      <div style="flex:1;min-width:0">
+        <div style="font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.track_name || "Unknown")}</div>
+        <div style="font-size:10px;color:rgba(255,255,255,0.3)">${esc(t.artist_name || "")}</div>
+      </div>
+      <div onclick="addToQueue('${t.track_id}', this)" style="width:22px;height:22px;border-radius:50%;background:rgba(29,185,84,0.1);display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:13px;color:rgba(29,185,84,0.6);font-weight:700;flex-shrink:0" title="Add to queue">+</div>
+      ${t.play_count ? `<span style="font-size:10px;color:rgba(255,255,255,0.2)">${t.play_count}x</span>` : ""}
+    </div>
+  `).join("");
 }
 
 // ═══════ GO ═══════
