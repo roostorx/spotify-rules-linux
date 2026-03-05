@@ -199,6 +199,18 @@
 
     <!-- Content -->
     <div id="stats-content"></div>
+
+    <!-- Blocklist -->
+    <div style="margin-top:32px;border-top:1px solid rgba(255,255,255,0.06);padding-top:20px">
+      <div onclick="toggleBlocklist()" style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-bottom:12px">
+        <span style="font-size:14px;font-weight:700;color:rgba(255,255,255,0.4)">Blocked</span>
+        <span id="blocklist-count" style="font-size:11px;color:rgba(255,255,255,0.2)"></span>
+        <span id="blocklist-arrow" style="font-size:10px;color:rgba(255,255,255,0.2);transition:transform 0.2s">&#9660;</span>
+      </div>
+      <div id="blocklist-section" style="display:none">
+        <div id="blocklist-items"></div>
+      </div>
+    </div>
   </div>
 
   <!-- SMART PLAYLISTS TAB -->
@@ -726,6 +738,79 @@ window.addToQueue = async function(trackId, el) {
     setTimeout(() => { el.innerHTML = orig; el.style.color = ""; el.style.pointerEvents = ""; }, 2000);
   }
 };
+
+// Track metadata cache for block buttons
+const trackCache = new Map();
+
+window.blockFromId = function(trackId) {
+  const t = trackCache.get(trackId) || {};
+  blockTrack(trackId, t.name || "Unknown", t.artist || "Unknown");
+};
+
+window.blockTrack = async function(trackId, trackName, artistName) {
+  if (!confirm(`Block "${trackName}" by ${artistName}?\n\nThis will delete ALL listens of this track and prevent it from being recorded or imported again.`)) return;
+  try {
+    const result = await api("/api/blocklist", { method: "POST", body: JSON.stringify({ block_type: "track", block_value: trackId, label: `${trackName} — ${artistName}` }) });
+    alert(`Blocked! ${result.deleted} listen(s) deleted.`);
+    loadStats();
+    loadBlocklist();
+  } catch (e) { alert("Failed: " + e.message); }
+};
+
+window.blockAlbum = async function(albumName, artistName) {
+  if (!confirm(`Block album "${albumName}"${artistName ? ` by ${artistName}` : ""}?\n\nThis will delete ALL listens from this album and prevent them from being recorded or imported again.`)) return;
+  try {
+    const result = await api("/api/blocklist", { method: "POST", body: JSON.stringify({ block_type: "album", block_value: albumName, label: `${albumName}${artistName ? ` — ${artistName}` : ""}` }) });
+    alert(`Blocked! ${result.deleted} listen(s) deleted.`);
+    loadStats();
+    loadBlocklist();
+  } catch (e) { alert("Failed: " + e.message); }
+};
+
+window.blockArtist = async function(artistName) {
+  if (!confirm(`Block ALL songs by "${artistName}"?\n\nThis will delete ALL listens from this artist and prevent any from being recorded or imported again.`)) return;
+  try {
+    const result = await api("/api/blocklist", { method: "POST", body: JSON.stringify({ block_type: "artist", block_value: artistName, label: artistName }) });
+    alert(`Blocked! ${result.deleted} listen(s) deleted.`);
+    loadStats();
+    loadBlocklist();
+  } catch (e) { alert("Failed: " + e.message); }
+};
+
+window.unblock = async function(id) {
+  try {
+    await api(`/api/blocklist/${id}`, { method: "DELETE" });
+    loadBlocklist();
+  } catch (e) { alert("Failed: " + e.message); }
+};
+
+let blocklistVisible = false;
+window.toggleBlocklist = function() {
+  blocklistVisible = !blocklistVisible;
+  document.getElementById("blocklist-section").style.display = blocklistVisible ? "" : "none";
+  document.getElementById("blocklist-arrow").style.transform = blocklistVisible ? "rotate(180deg)" : "";
+  if (blocklistVisible) loadBlocklist();
+};
+
+async function loadBlocklist() {
+  try {
+    const items = await api("/api/blocklist");
+    document.getElementById("blocklist-count").textContent = items.length ? `(${items.length})` : "";
+    const el = document.getElementById("blocklist-items");
+    if (!items.length) {
+      el.innerHTML = '<div style="color:rgba(255,255,255,0.2);font-size:12px;padding:8px 0">No blocked tracks or artists</div>';
+      return;
+    }
+    el.innerHTML = items.map(b => `
+      <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.03)">
+        <span style="font-size:10px;padding:2px 6px;border-radius:4px;background:rgba(239,68,68,0.1);color:rgba(239,68,68,0.6);font-weight:600;text-transform:uppercase">${esc(b.block_type)}</span>
+        <span style="flex:1;font-size:12px;color:rgba(255,255,255,0.6)">${esc(b.label || b.block_value)}</span>
+        <span style="font-size:10px;color:rgba(255,255,255,0.15)">${new Date(b.created_at * 1000).toLocaleDateString()}</span>
+        <button onclick="unblock(${b.id})" style="background:none;border:none;color:rgba(255,255,255,0.2);cursor:pointer;font-size:12px;padding:2px 6px" title="Unblock">unblock</button>
+      </div>
+    `).join("");
+  } catch (e) { console.error(e); }
+}
 
 async function saveRule() {
   if (!buildTrigger || !buildActions.length) return;
@@ -1265,11 +1350,57 @@ async function loadStatsSearch(q) {
   document.getElementById("stats-subtabs").style.display = "none";
   try {
     const results = await api(`/api/listens/search?q=${encodeURIComponent(q)}&${statsParams()}&sort=${statsSort}`);
-    if (!results.length) {
+    const { tracks, artists, albums } = results;
+    if (!tracks.length && !artists.length && !albums.length) {
       el.innerHTML = '<div style="text-align:center;padding:40px;color:rgba(255,255,255,0.3)">No results</div>';
       return;
     }
-    renderTopTracks(results);
+    let html = "";
+
+    if (artists.length) {
+      html += `<div style="font-size:12px;font-weight:700;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:0.05em;margin:16px 0 8px">Artists</div>`;
+      html += artists.map(a => `
+        <div style="display:flex;align-items:center;gap:10px;padding:6px 8px;border-radius:8px;margin-bottom:2px">
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;font-weight:600">${esc(a.artist_name)}</div>
+            <div style="font-size:11px;color:rgba(255,255,255,0.3)">${a.play_count} plays · ${a.unique_tracks} tracks · ${a.total_hours}h</div>
+          </div>
+          <div onclick="blockArtist(decodeURIComponent('${encodeURIComponent(a.artist_name)}'))" style="padding:4px 10px;border-radius:6px;background:rgba(239,68,68,0.08);color:rgba(239,68,68,0.5);font-size:11px;font-weight:600;cursor:pointer" title="Block all songs by this artist">Block Artist</div>
+        </div>
+      `).join("");
+    }
+
+    if (albums.length) {
+      html += `<div style="font-size:12px;font-weight:700;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:0.05em;margin:16px 0 8px">Albums</div>`;
+      html += albums.map(a => `
+        <div style="display:flex;align-items:center;gap:10px;padding:6px 8px;border-radius:8px;margin-bottom:2px">
+          ${a.album_image ? `<img src="${a.album_image}" style="width:36px;height:36px;border-radius:6px">` : '<div style="width:36px;height:36px;border-radius:6px;background:rgba(255,255,255,0.06)"></div>'}
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(a.album_name)}</div>
+            <div style="font-size:11px;color:rgba(255,255,255,0.3)">${esc(a.artist_name || "")} · ${a.play_count} plays · ${a.unique_tracks} tracks</div>
+          </div>
+          <div onclick="blockAlbum(decodeURIComponent('${encodeURIComponent(a.album_name)}'), decodeURIComponent('${encodeURIComponent(a.artist_name || "")}'))" style="padding:4px 10px;border-radius:6px;background:rgba(239,68,68,0.08);color:rgba(239,68,68,0.5);font-size:11px;font-weight:600;cursor:pointer" title="Block this album">Block Album</div>
+        </div>
+      `).join("");
+    }
+
+    if (tracks.length) {
+      html += `<div style="font-size:12px;font-weight:700;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:0.05em;margin:16px 0 8px">Tracks</div>`;
+      tracks.forEach(t => trackCache.set(t.track_id, { name: t.track_name, artist: t.artist_name }));
+      html += tracks.map(t => `
+        <div style="display:flex;align-items:center;gap:10px;padding:6px 8px;border-radius:8px;margin-bottom:2px">
+          ${t.album_image ? `<img src="${t.album_image}" style="width:36px;height:36px;border-radius:6px">` : '<div style="width:36px;height:36px;border-radius:6px;background:rgba(255,255,255,0.06)"></div>'}
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.track_name || "Unknown")}</div>
+            <div style="font-size:11px;color:rgba(255,255,255,0.3)">${esc(t.artist_name || "")} · ${t.play_count} plays · ${t.total_hours}h</div>
+          </div>
+          <div onclick="addToQueue('${t.track_id}', this)" style="width:24px;height:24px;border-radius:50%;background:rgba(29,185,84,0.1);display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;font-size:14px;color:rgba(29,185,84,0.6);font-weight:700" title="Add to queue">+</div>
+          <div onclick="blockFromId('${t.track_id}')" style="padding:4px 10px;border-radius:6px;background:rgba(239,68,68,0.08);color:rgba(239,68,68,0.5);font-size:11px;font-weight:600;cursor:pointer" title="Block this track">Block</div>
+        </div>
+      `).join("");
+    }
+
+    el.innerHTML = html;
   } catch (e) {
     el.innerHTML = `<div style="text-align:center;padding:20px;color:rgba(255,255,255,0.3)">${esc(e.message)}</div>`;
   }
@@ -1372,6 +1503,7 @@ async function loadStatsContent() {
 function renderTopTracks(tracks) {
   const el = document.getElementById("stats-content");
   if (!tracks.length) { el.innerHTML = '<div style="text-align:center;padding:40px;color:rgba(255,255,255,0.3)">No data for this period</div>'; return; }
+  tracks.forEach(t => trackCache.set(t.track_id, { name: t.track_name, artist: t.artist_name }));
   const maxVal = statsSort === "time" ? tracks[0].total_ms : tracks[0].play_count;
   el.innerHTML = tracks.map(t => {
     const val = statsSort === "time" ? t.total_ms : t.play_count;
@@ -1387,6 +1519,7 @@ function renderTopTracks(tracks) {
         <div style="font-size:11px;color:rgba(255,255,255,0.4)">${esc(t.artist_name || "")}${t.album_name ? ` · ${esc(t.album_name)}` : ""}</div>
       </div>
       <div onclick="addToQueue('${t.track_id}', this)" style="width:28px;height:28px;border-radius:50%;background:rgba(29,185,84,0.1);display:flex;align-items:center;justify-content:center;cursor:pointer;z-index:1;flex-shrink:0;font-size:16px;color:rgba(29,185,84,0.6);font-weight:700" title="Add to queue">+</div>
+      <div onclick="blockFromId('${t.track_id}')" style="width:28px;height:28px;border-radius:50%;background:rgba(239,68,68,0.05);display:flex;align-items:center;justify-content:center;cursor:pointer;z-index:1;flex-shrink:0;font-size:11px;color:rgba(239,68,68,0.3);font-weight:700" title="Block this track">x</div>
       <div style="text-align:right;flex-shrink:0;z-index:1">
         <div style="font-size:14px;font-weight:800;color:#1DB954">${statsSort === "time" ? t.total_hours + "h" : t.play_count.toLocaleString()}</div>
         <div style="font-size:10px;color:rgba(255,255,255,0.3)">${statsSort === "time" ? t.play_count + " plays" : t.total_hours + "h"}</div>
@@ -1412,6 +1545,7 @@ function renderTopArtists(artists) {
         <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(a.artist_name)}</div>
         <div style="font-size:11px;color:rgba(255,255,255,0.4)">${a.unique_tracks} tracks · ${a.unique_albums} albums</div>
       </div>
+      <div onclick="blockArtist(decodeURIComponent('${encodeURIComponent(a.artist_name)}'))" style="width:28px;height:28px;border-radius:50%;background:rgba(239,68,68,0.05);display:flex;align-items:center;justify-content:center;cursor:pointer;z-index:1;flex-shrink:0;font-size:11px;color:rgba(239,68,68,0.25);font-weight:700" title="Block this artist">x</div>
       <div style="text-align:right;flex-shrink:0;z-index:1">
         <div style="font-size:14px;font-weight:800;color:#1DB954">${statsSort === "time" ? a.total_hours + "h" : a.play_count.toLocaleString()}</div>
         <div style="font-size:10px;color:rgba(255,255,255,0.3)">${statsSort === "time" ? a.play_count + " plays" : a.total_hours + "h"}</div>
@@ -1448,6 +1582,7 @@ function renderTopAlbums(albums) {
 function renderRecentListens(listens) {
   const el = document.getElementById("stats-content");
   if (!listens.length) { el.innerHTML = '<div style="text-align:center;padding:40px;color:rgba(255,255,255,0.3)">No recent listens</div>'; return; }
+  listens.forEach(l => { if (l.track_id) trackCache.set(l.track_id, { name: l.track_name, artist: l.artist_name }); });
   el.innerHTML = listens.map(l => {
     const img = l.album_image || "";
     const when = new Date(l.played_at);
@@ -1460,6 +1595,7 @@ function renderRecentListens(listens) {
         <div style="font-size:11px;color:rgba(255,255,255,0.4)">${esc(l.artist_name || "")}${l.album_name ? ` · ${esc(l.album_name)}` : ""}</div>
       </div>
       <div onclick="addToQueue('${l.track_id}', this)" style="width:24px;height:24px;border-radius:50%;background:rgba(29,185,84,0.1);display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;font-size:14px;color:rgba(29,185,84,0.6);font-weight:700" title="Add to queue">+</div>
+      <div onclick="blockFromId('${l.track_id}')" style="width:24px;height:24px;border-radius:50%;background:rgba(239,68,68,0.05);display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;font-size:10px;color:rgba(239,68,68,0.25);font-weight:700" title="Block this track">x</div>
       <div style="text-align:right;flex-shrink:0">
         <div style="font-size:11px;color:rgba(255,255,255,0.3)">${ago}</div>
         <div style="font-size:10px;color:rgba(255,255,255,0.2)">${msToTime(l.ms_played || 0)}</div>

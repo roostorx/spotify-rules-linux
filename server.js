@@ -130,6 +130,17 @@ db.exec(`
     PRIMARY KEY (user_id, track_uri, from_ts)
   );
 
+  CREATE TABLE IF NOT EXISTS listen_blocklist (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    block_type TEXT NOT NULL,
+    block_value TEXT NOT NULL,
+    label TEXT,
+    created_at INTEGER DEFAULT (unixepoch()),
+    UNIQUE(user_id, block_type, block_value),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+  );
+
   CREATE TABLE IF NOT EXISTS tracked_playlists (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
@@ -351,11 +362,38 @@ const stmts = {
     GROUP BY track_id ORDER BY COUNT(*) DESC LIMIT 50
   `),
 
+  searchArtists: db.prepare(`
+    SELECT artist_name, COUNT(*) as play_count, SUM(ms_played) as total_ms,
+           COUNT(DISTINCT track_id) as unique_tracks, COUNT(DISTINCT album_name) as unique_albums
+    FROM listens WHERE user_id = ? AND played_at BETWEEN ? AND ?
+      AND artist_name LIKE ? AND artist_name IS NOT NULL
+    GROUP BY artist_name ORDER BY COUNT(*) DESC LIMIT 20
+  `),
+  searchAlbums: db.prepare(`
+    SELECT album_name, artist_name, album_image, COUNT(*) as play_count, SUM(ms_played) as total_ms,
+           COUNT(DISTINCT track_id) as unique_tracks
+    FROM listens WHERE user_id = ? AND played_at BETWEEN ? AND ?
+      AND (album_name LIKE ? OR artist_name LIKE ?) AND album_name IS NOT NULL
+    GROUP BY album_name, artist_name ORDER BY COUNT(*) DESC LIMIT 20
+  `),
+
   // Listen exclusions
   insertExclusion: db.prepare("INSERT OR IGNORE INTO listen_exclusions (user_id, track_uri, from_ts, to_ts, reason) VALUES (?,?,?,?,?)"),
   getExclusions: db.prepare("SELECT * FROM listen_exclusions WHERE user_id = ?"),
   checkExclusion: db.prepare("SELECT 1 FROM listen_exclusions WHERE user_id = ? AND track_uri = ? AND ? BETWEEN from_ts AND to_ts LIMIT 1"),
   deleteListenRange: db.prepare("DELETE FROM listens WHERE user_id = ? AND track_uri = ? AND played_at BETWEEN ? AND ?"),
+
+  // Blocklist
+  getBlocklist: db.prepare("SELECT * FROM listen_blocklist WHERE user_id = ? ORDER BY created_at DESC"),
+  insertBlock: db.prepare("INSERT OR IGNORE INTO listen_blocklist (user_id, block_type, block_value, label) VALUES (?,?,?,?)"),
+  deleteBlock: db.prepare("DELETE FROM listen_blocklist WHERE id = ? AND user_id = ?"),
+  checkBlockTrack: db.prepare("SELECT 1 FROM listen_blocklist WHERE user_id = ? AND ((block_type = 'track' AND block_value = ?) OR (block_type = 'artist' AND block_value = ?) OR (block_type = 'album' AND block_value = ?)) LIMIT 1"),
+  deleteListensByTrack: db.prepare("DELETE FROM listens WHERE user_id = ? AND track_id = ?"),
+  deleteListensByArtist: db.prepare("DELETE FROM listens WHERE user_id = ? AND artist_name = ?"),
+  deleteListensByAlbum: db.prepare("DELETE FROM listens WHERE user_id = ? AND album_name = ?"),
+  countListensByTrack: db.prepare("SELECT COUNT(*) as count FROM listens WHERE user_id = ? AND track_id = ?"),
+  countListensByArtist: db.prepare("SELECT COUNT(*) as count FROM listens WHERE user_id = ? AND artist_name = ?"),
+  countListensByAlbum: db.prepare("SELECT COUNT(*) as count FROM listens WHERE user_id = ? AND album_name = ?"),
 
   // Tracked playlists
   getTrackedPlaylists: db.prepare("SELECT * FROM tracked_playlists WHERE user_id = ? ORDER BY created_at DESC"),
@@ -582,14 +620,17 @@ async function pollUser(user) {
     if (trackChanged && ms.currentListen) {
       const cl = ms.currentListen;
       const msPlayed = cl.lastProgress || 0;
-      // Only record if listened for at least 30 seconds
+      // Only record if listened for at least 30 seconds and not blocked
       if (msPlayed >= 30000) {
-        try {
-          stmts.insertListen.run(
-            user.id, cl.trackId, cl.trackName, cl.artist, cl.album,
-            cl.albumImage, cl.uri, msPlayed, cl.startedAt, "live", null
-          );
-        } catch {}
+        const blocked = stmts.checkBlockTrack.get(user.id, cl.trackId, cl.artist, cl.album);
+        if (!blocked) {
+          try {
+            stmts.insertListen.run(
+              user.id, cl.trackId, cl.trackName, cl.artist, cl.album,
+              cl.albumImage, cl.uri, msPlayed, cl.startedAt, "live", null
+            );
+          } catch {}
+        }
       }
       ms.currentListen = null;
     }
@@ -1444,6 +1485,12 @@ app.post("/api/listens/import", requireUser, (req, res) => {
       const playedAt = entry.ts || null;
       if (!playedAt) { skipped++; continue; }
 
+      // Check blocklist
+      if (stmts.checkBlockTrack.get(req.user.id, trackId, entry.master_metadata_album_artist_name || "", entry.master_metadata_album_album_name || "")) {
+        skipped++;
+        continue;
+      }
+
       // Check for exclusion
       if (trackUri && stmts.checkExclusion.get(req.user.id, trackUri, playedAt)) {
         skipped++;
@@ -1486,14 +1533,56 @@ app.post("/api/listens/import", requireUser, (req, res) => {
 // GET /api/listens/search
 app.get("/api/listens/search", requireUser, (req, res) => {
   const { q, period, from, to, sort } = req.query;
-  if (!q) return res.json([]);
+  if (!q) return res.json({ tracks: [], artists: [], albums: [] });
   const { start, end } = getDateRange(period, from, to);
   const like = `%${q}%`;
-  const results = stmts.searchListens.all(req.user.id, start, end, like, like, like);
-  res.json(results.map((t, i) => ({
-    rank: i + 1, ...t,
-    total_hours: Math.round(t.total_ms / 3600000 * 10) / 10,
-  })));
+  const tracks = stmts.searchListens.all(req.user.id, start, end, like, like, like).map((t, i) => ({
+    rank: i + 1, ...t, total_hours: Math.round(t.total_ms / 3600000 * 10) / 10,
+  }));
+  const artists = stmts.searchArtists.all(req.user.id, start, end, like).map((a, i) => ({
+    rank: i + 1, ...a, total_hours: Math.round(a.total_ms / 3600000 * 10) / 10,
+  }));
+  const albums = stmts.searchAlbums.all(req.user.id, start, end, like, like).map((a, i) => ({
+    rank: i + 1, ...a, total_hours: Math.round(a.total_ms / 3600000 * 10) / 10,
+  }));
+  res.json({ tracks, artists, albums });
+});
+
+// GET /api/blocklist
+app.get("/api/blocklist", requireUser, (req, res) => {
+  res.json(stmts.getBlocklist.all(req.user.id));
+});
+
+// POST /api/blocklist — block a track or artist
+app.post("/api/blocklist", requireUser, (req, res) => {
+  const { block_type, block_value, label } = req.body;
+  if (!["track", "artist", "album"].includes(block_type) || !block_value) {
+    return res.status(400).json({ error: "block_type (track|artist|album) and block_value required" });
+  }
+
+  stmts.insertBlock.run(req.user.id, block_type, block_value, label || block_value);
+
+  // Delete all matching listens
+  let deleted = 0;
+  if (block_type === "track") {
+    deleted = stmts.countListensByTrack.get(req.user.id, block_value).count;
+    stmts.deleteListensByTrack.run(req.user.id, block_value);
+  } else if (block_type === "artist") {
+    deleted = stmts.countListensByArtist.get(req.user.id, block_value).count;
+    stmts.deleteListensByArtist.run(req.user.id, block_value);
+  } else {
+    deleted = stmts.countListensByAlbum.get(req.user.id, block_value).count;
+    stmts.deleteListensByAlbum.run(req.user.id, block_value);
+  }
+
+  console.log(`  🚫 Blocked ${block_type} "${label || block_value}" — deleted ${deleted} listens`);
+  res.json({ ok: true, deleted });
+});
+
+// DELETE /api/blocklist/:id — unblock
+app.delete("/api/blocklist/:id", requireUser, (req, res) => {
+  stmts.deleteBlock.run(req.params.id, req.user.id);
+  res.json({ ok: true });
 });
 
 // ═══════════════════════════════════════
