@@ -17,18 +17,18 @@ npm install
 npm start
 ```
 
-Opens at `http://127.0.0.1:8888` (or your server's IP on port 8888).
+Opens at `http://127.0.0.1:8777` (or your server's IP on port 8777).
 
 ## Spotify App Setup
 
 1. Go to [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard)
 2. Create an app
-3. Set redirect URI to: `http://YOUR_SERVER_IP:8888/callback`
+3. Set redirect URI to: `http://YOUR_SERVER_IP:8777/callback`
 4. Copy your Client ID
 
 If running on a LAN machine (e.g. `192.168.1.50`):
 ```bash
-REDIRECT_URI=http://192.168.1.50:8888/callback npm start
+REDIRECT_URI=http://192.168.1.50:8777/callback npm start
 ```
 
 ## Run as a Service (systemd)
@@ -47,7 +47,7 @@ ExecStart=/usr/bin/node /path/to/spotify-rules-linux/server.js
 WorkingDirectory=/path/to/spotify-rules-linux
 Restart=always
 User=youruser
-Environment=REDIRECT_URI=http://YOUR_IP:8888/callback
+Environment=REDIRECT_URI=http://YOUR_IP:8777/callback
 
 [Install]
 WantedBy=multi-user.target
@@ -60,11 +60,19 @@ sudo systemctl start spotify-rules
 
 ## What It Does
 
+### Rules Engine
 - Monitors your Spotify playback every 2 seconds
 - When a trigger song is detected, arms the rule
 - When the trigger song ends, force-plays the next track via PUT /me/player/play
 - Rules persist in SQLite — survives restarts
 - Auto-refreshes Spotify tokens — no re-auth needed
+
+### Playlist Tracker
+- Track any Spotify playlist (including editorial/algorithmic playlists like "Chaos Anthems")
+- Automatically creates a private archive playlist on your account
+- Checks for changes every 5 minutes and adds new songs additively (never removes)
+- Uses Spotify's embed page to read playlists, bypassing API restrictions on editorial playlists
+- Paste any Spotify playlist URL in the Tracker tab to start tracking
 
 ## Remote Access (SSH Tunnel)
 

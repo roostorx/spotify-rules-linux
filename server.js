@@ -98,6 +98,33 @@ db.exec(`
     completed_at INTEGER,
     FOREIGN KEY (user_id) REFERENCES users(id)
   );
+
+  CREATE TABLE IF NOT EXISTS tracked_playlists (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    source_playlist_id TEXT NOT NULL,
+    source_playlist_name TEXT,
+    source_playlist_image TEXT,
+    dest_playlist_id TEXT,
+    dest_playlist_name TEXT,
+    enabled INTEGER DEFAULT 1,
+    tracks_added INTEGER DEFAULT 0,
+    last_checked_at INTEGER,
+    last_change_at INTEGER,
+    created_at INTEGER DEFAULT (unixepoch()),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS tracked_playlist_tracks (
+    tracked_id TEXT NOT NULL,
+    track_id TEXT NOT NULL,
+    track_uri TEXT NOT NULL,
+    track_name TEXT,
+    track_artist TEXT,
+    added_at INTEGER DEFAULT (unixepoch()),
+    PRIMARY KEY (tracked_id, track_id),
+    FOREIGN KEY (tracked_id) REFERENCES tracked_playlists(id) ON DELETE CASCADE
+  );
 `);
 
 // Migration: add fire_count to existing databases
@@ -179,6 +206,29 @@ const stmts = {
       (SELECT COUNT(*) FROM playlist_tracks WHERE user_id = ?) as total_entries
   `),
 
+  // Tracked playlists
+  getTrackedPlaylists: db.prepare("SELECT * FROM tracked_playlists WHERE user_id = ? ORDER BY created_at DESC"),
+  getTrackedPlaylist: db.prepare("SELECT * FROM tracked_playlists WHERE id = ? AND user_id = ?"),
+  insertTrackedPlaylist: db.prepare(`
+    INSERT INTO tracked_playlists (id, user_id, source_playlist_id, source_playlist_name, source_playlist_image, dest_playlist_id, dest_playlist_name)
+    VALUES (?,?,?,?,?,?,?)
+  `),
+  deleteTrackedPlaylist: db.prepare("DELETE FROM tracked_playlists WHERE id = ? AND user_id = ?"),
+  toggleTrackedPlaylist: db.prepare("UPDATE tracked_playlists SET enabled = ? WHERE id = ? AND user_id = ?"),
+  updateTrackedChecked: db.prepare("UPDATE tracked_playlists SET last_checked_at = unixepoch() WHERE id = ?"),
+  updateTrackedChange: db.prepare("UPDATE tracked_playlists SET last_change_at = unixepoch(), tracks_added = tracks_added + ? WHERE id = ?"),
+  getTrackedTracks: db.prepare("SELECT track_id FROM tracked_playlist_tracks WHERE tracked_id = ?"),
+  insertTrackedTrack: db.prepare("INSERT OR IGNORE INTO tracked_playlist_tracks (tracked_id, track_id, track_uri, track_name, track_artist) VALUES (?,?,?,?,?)"),
+  deleteTrackedTracks: db.prepare("DELETE FROM tracked_playlist_tracks WHERE tracked_id = ?"),
+  getTrackedTracksFull: db.prepare("SELECT * FROM tracked_playlist_tracks WHERE tracked_id = ? ORDER BY added_at DESC"),
+  updateTrackedMeta: db.prepare("UPDATE tracked_playlists SET source_playlist_name = ?, source_playlist_image = ? WHERE id = ?"),
+  getAllEnabledTracked: db.prepare(`
+    SELECT tp.*, u.access_token, u.refresh_token, u.client_id, u.token_expires_at, u.display_name as user_display_name
+    FROM tracked_playlists tp
+    JOIN users u ON u.id = tp.user_id
+    WHERE tp.enabled = 1
+  `),
+
   // Sync status
   upsertSyncStatus: db.prepare(`
     INSERT INTO sync_status (user_id, status, progress_current, progress_total, message, started_at)
@@ -205,7 +255,9 @@ async function spotifyFetch(endpoint, token, opts = {}) {
     const body = await r.text().catch(() => "");
     throw new Error(`Spotify ${r.status}: ${body}`);
   }
-  return r.json();
+  const text = await r.text();
+  if (!text) return null;
+  return JSON.parse(text);
 }
 
 async function refreshAccessToken(user) {
@@ -420,7 +472,7 @@ app.get("/login", (req, res) => {
     client_id: clientId,
     response_type: "code",
     redirect_uri: REDIRECT_URI,
-    scope: "user-read-playback-state user-modify-playback-state user-read-currently-playing playlist-read-private playlist-read-collaborative",
+    scope: "user-read-playback-state user-modify-playback-state user-read-currently-playing playlist-read-private playlist-read-collaborative playlist-modify-public playlist-modify-private",
     code_challenge_method: "S256",
     code_challenge: challenge,
     state,
@@ -954,6 +1006,246 @@ app.get("/api/library/playlists", requireUser, (req, res) => {
 });
 
 // ═══════════════════════════════════════
+// PLAYLIST TRACKER ENGINE
+// ═══════════════════════════════════════
+const TRACKER_INTERVAL = 5 * 60 * 1000; // Check every 5 minutes
+let trackerInterval = null;
+
+// Fetch playlist data via Spotify embed page (works for all playlists including editorial)
+async function fetchPlaylistEmbed(playlistId) {
+  const url = `https://open.spotify.com/embed/playlist/${playlistId}`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`Embed fetch failed: HTTP ${r.status}`);
+  const html = await r.text();
+  const match = html.match(/<script id="__NEXT_DATA__"[^>]*>(.*?)<\/script>/);
+  if (!match) throw new Error("Could not parse embed page");
+  const data = JSON.parse(match[1]);
+  const entity = data?.props?.pageProps?.state?.data?.entity;
+  if (!entity) throw new Error("No playlist data in embed page");
+  return {
+    name: entity.name || entity.title || "Unknown Playlist",
+    image: entity.coverArt?.sources?.[0]?.url || null,
+    tracks: (entity.trackList || []).map(t => ({
+      uri: t.uri,
+      id: t.uri?.split(":").pop(),
+      name: t.title || "Unknown",
+      artist: (t.subtitle || "").replace(/\u00a0/g, " "),
+    })),
+  };
+}
+
+async function checkTrackedPlaylist(tp) {
+  const user = {
+    id: tp.user_id,
+    access_token: tp.access_token,
+    refresh_token: tp.refresh_token,
+    client_id: tp.client_id,
+    token_expires_at: tp.token_expires_at,
+    display_name: tp.user_display_name,
+  };
+
+  try {
+    const token = await ensureValidToken(user);
+
+    // Fetch tracks via embed page (bypasses API restrictions on editorial playlists)
+    const embed = await fetchPlaylistEmbed(tp.source_playlist_id);
+
+    // Update metadata if it was missing
+    if (tp.source_playlist_name === "Unknown Playlist" && embed.name !== "Unknown Playlist") {
+      stmts.updateTrackedMeta.run(embed.name, embed.image, tp.id);
+    }
+
+    // Get known tracks
+    const known = new Set(stmts.getTrackedTracks.all(tp.id).map(r => r.track_id));
+
+    // Find new tracks
+    const newTracks = embed.tracks.filter(t => t.id && !known.has(t.id));
+
+    if (newTracks.length > 0) {
+      // Add to destination playlist in batches of 100
+      for (let i = 0; i < newTracks.length; i += 100) {
+        const batch = newTracks.slice(i, i + 100);
+        const uris = batch.map(t => t.uri);
+        await spotifyFetch(`/playlists/${tp.dest_playlist_id}/items`, token, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ uris }),
+        });
+        await new Promise(r => setTimeout(r, 300));
+      }
+
+      // Record in DB
+      const insertBatch = db.transaction((tracks) => {
+        for (const t of tracks) {
+          stmts.insertTrackedTrack.run(
+            tp.id, t.id, t.uri,
+            t.name || null,
+            t.artist || null
+          );
+        }
+      });
+      insertBatch(newTracks);
+
+      stmts.updateTrackedChange.run(newTracks.length, tp.id);
+      console.log(`  📋 Tracker: Added ${newTracks.length} new track(s) from "${tp.source_playlist_name}" → "${tp.dest_playlist_name}" for ${user.display_name}`);
+    }
+
+    stmts.updateTrackedChecked.run(tp.id);
+
+  } catch (e) {
+    if (!e.message.includes("502") && !e.message.includes("503")) {
+      console.error(`  ❌ Tracker error for "${tp.source_playlist_name}": ${e.message}`);
+    }
+  }
+}
+
+function startTracker() {
+  if (trackerInterval) return;
+  console.log("  📋 Playlist tracker started (checking every 5 min)");
+  // Run immediately on startup, then every 5 min
+  setTimeout(async () => {
+    const tracked = stmts.getAllEnabledTracked.all();
+    if (tracked.length > 0) {
+      console.log(`  📋 Checking ${tracked.length} tracked playlist(s)...`);
+      for (const tp of tracked) {
+        await checkTrackedPlaylist(tp);
+      }
+    }
+  }, 10000); // 10s after startup
+
+  trackerInterval = setInterval(async () => {
+    const tracked = stmts.getAllEnabledTracked.all();
+    for (const tp of tracked) {
+      await checkTrackedPlaylist(tp);
+    }
+  }, TRACKER_INTERVAL);
+}
+
+// ═══════════════════════════════════════
+// TRACKER API ENDPOINTS
+// ═══════════════════════════════════════
+
+// GET /api/tracker — list tracked playlists
+app.get("/api/tracker", requireUser, (req, res) => {
+  const tracked = stmts.getTrackedPlaylists.all(req.user.id);
+  res.json(tracked.map(t => ({ ...t, enabled: !!t.enabled })));
+});
+
+// POST /api/tracker — add a playlist to track
+app.post("/api/tracker", requireUser, async (req, res) => {
+  const { playlist_url } = req.body;
+  if (!playlist_url) return res.status(400).json({ error: "playlist_url required" });
+
+  // Extract playlist ID from URL
+  const match = playlist_url.match(/playlist\/([a-zA-Z0-9]+)/);
+  if (!match) return res.status(400).json({ error: "Invalid Spotify playlist URL" });
+  const sourceId = match[1];
+
+  try {
+    const token = await ensureValidToken(req.user);
+
+    // Fetch playlist data via embed page (works for all playlists including editorial)
+    console.log(`  📋 Tracker: Fetching playlist ${sourceId} via embed...`);
+    let embed;
+    try {
+      embed = await fetchPlaylistEmbed(sourceId);
+    } catch (e) {
+      console.log(`  📋 Tracker: Embed fetch failed: ${e.message}`);
+      return res.status(404).json({ error: "Playlist not found or not accessible" });
+    }
+
+    const sourceName = embed.name;
+    const sourceImage = embed.image;
+    console.log(`  📋 Tracker: Found "${sourceName}" (${embed.tracks.length} tracks), creating archive playlist...`);
+
+    // Create destination playlist
+    const destName = `${sourceName} (Archive)`;
+    const dest = await spotifyFetch("/me/playlists", token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: destName,
+        description: `Additive archive of "${sourceName}" — tracked by Spotify Rules`,
+        public: false,
+      }),
+    });
+
+    const trackId = crypto.randomUUID();
+    stmts.insertTrackedPlaylist.run(
+      trackId, req.user.id,
+      sourceId,
+      sourceName,
+      sourceImage,
+      dest.id,
+      destName
+    );
+
+    // Do initial sync immediately
+    const tp = stmts.getTrackedPlaylist.get(trackId, req.user.id);
+    const tpWithUser = {
+      ...tp,
+      access_token: req.user.access_token,
+      refresh_token: req.user.refresh_token,
+      client_id: req.user.client_id,
+      token_expires_at: req.user.token_expires_at,
+      user_display_name: req.user.display_name,
+    };
+
+    // Run initial sync in background
+    checkTrackedPlaylist(tpWithUser);
+
+    res.json({ ...tp, enabled: !!tp.enabled });
+
+  } catch (e) {
+    console.error("Tracker create error:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE /api/tracker/:id
+app.delete("/api/tracker/:id", requireUser, (req, res) => {
+  stmts.deleteTrackedTracks.run(req.params.id);
+  stmts.deleteTrackedPlaylist.run(req.params.id, req.user.id);
+  res.json({ ok: true });
+});
+
+// PATCH /api/tracker/:id/toggle
+app.patch("/api/tracker/:id/toggle", requireUser, (req, res) => {
+  const tp = stmts.getTrackedPlaylist.get(req.params.id, req.user.id);
+  if (!tp) return res.status(404).json({ error: "not found" });
+  const newState = tp.enabled ? 0 : 1;
+  stmts.toggleTrackedPlaylist.run(newState, req.params.id, req.user.id);
+  res.json({ enabled: !!newState });
+});
+
+// POST /api/tracker/:id/check — force check now
+app.post("/api/tracker/:id/check", requireUser, async (req, res) => {
+  const tp = stmts.getTrackedPlaylist.get(req.params.id, req.user.id);
+  if (!tp) return res.status(404).json({ error: "not found" });
+
+  const tpWithUser = {
+    ...tp,
+    access_token: req.user.access_token,
+    refresh_token: req.user.refresh_token,
+    client_id: req.user.client_id,
+    token_expires_at: req.user.token_expires_at,
+    user_display_name: req.user.display_name,
+  };
+
+  await checkTrackedPlaylist(tpWithUser);
+  const updated = stmts.getTrackedPlaylist.get(req.params.id, req.user.id);
+  res.json({ ...updated, enabled: !!updated.enabled });
+});
+
+// GET /api/tracker/:id/tracks — get tracked track history
+app.get("/api/tracker/:id/tracks", requireUser, (req, res) => {
+  const tp = stmts.getTrackedPlaylist.get(req.params.id, req.user.id);
+  if (!tp) return res.status(404).json({ error: "not found" });
+  const tracks = stmts.getTrackedTracksFull.all(req.params.id);
+  res.json(tracks);
+});
+
+// ═══════════════════════════════════════
 // START
 // ═══════════════════════════════════════
 app.listen(PORT, "0.0.0.0", () => {
@@ -964,6 +1256,7 @@ app.listen(PORT, "0.0.0.0", () => {
 
   // Start the monitoring engine
   startMonitoring();
+  startTracker();
 
   const userCount = stmts.getAllActiveUsers.all().length;
   if (userCount > 0) {

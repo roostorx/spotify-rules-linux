@@ -88,6 +88,7 @@
     <div style="display:flex;gap:4px;border-bottom:1px solid rgba(255,255,255,0.06);margin-bottom:0">
       <button onclick="switchTab('rules')" id="tab-rules" class="tab-btn tab-active" style="padding:10px 20px;border:none;background:none;color:#1DB954;font-size:14px;font-weight:700;cursor:pointer;border-bottom:2px solid #1DB954;font-family:inherit;margin-bottom:-1px">⚡ Rules</button>
       <button onclick="switchTab('library')" id="tab-library" class="tab-btn" style="padding:10px 20px;border:none;background:none;color:rgba(255,255,255,0.4);font-size:14px;font-weight:700;cursor:pointer;border-bottom:2px solid transparent;font-family:inherit;margin-bottom:-1px">📚 Library</button>
+      <button onclick="switchTab('tracker')" id="tab-tracker" class="tab-btn" style="padding:10px 20px;border:none;background:none;color:rgba(255,255,255,0.4);font-size:14px;font-weight:700;cursor:pointer;border-bottom:2px solid transparent;font-family:inherit;margin-bottom:-1px">📋 Tracker</button>
     </div>
   </div>
 
@@ -113,6 +114,25 @@
       </div>
       <div id="log-entries" class="mono" style="background:rgba(0,0,0,0.3);border-radius:10px;border:1px solid rgba(255,255,255,0.05);padding:14px;max-height:200px;overflow-y:auto;font-size:11px;line-height:1.8"></div>
     </div>
+  </div>
+
+  <!-- TRACKER TAB -->
+  <div id="tab-content-tracker" style="display:none;max-width:720px;margin:0 auto;padding:24px 20px">
+    <div class="card" style="margin-bottom:24px">
+      <div style="display:flex;align-items:center;gap:14px;margin-bottom:16px">
+        <div style="font-size:28px">📋</div>
+        <div>
+          <div style="font-size:16px;font-weight:700">Playlist Tracker</div>
+          <div style="font-size:13px;color:rgba(255,255,255,0.5);margin-top:2px">Track external playlists and archive all songs additively to your own playlist</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <input id="tracker-url" type="text" class="input" placeholder="Paste a Spotify playlist URL..." style="flex:1" />
+        <button id="tracker-add-btn" onclick="addTrackedPlaylist()" class="btn btn-sm" style="background:rgba(29,185,84,0.15);color:#1DB954;border:none;white-space:nowrap">+ Track</button>
+      </div>
+      <div id="tracker-error" style="color:#ff5050;font-size:12px;margin-top:8px;display:none"></div>
+    </div>
+    <div id="tracker-list"></div>
   </div>
 
   <!-- LIBRARY TAB -->
@@ -174,7 +194,10 @@ async function api(path, opts = {}) {
   if (r.status === 204) return null;
   const text = await r.text();
   if (!text || text === "null") return null;
-  return JSON.parse(text);
+  if (text.startsWith("<")) throw new Error(`Server returned HTML (status ${r.status})`);
+  const data = JSON.parse(text);
+  if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+  return data;
 }
 
 function extractTrackId(input) {
@@ -643,9 +666,12 @@ function switchTab(tab) {
   }
   document.getElementById("tab-content-rules").style.display = tab === "rules" ? "" : "none";
   document.getElementById("tab-content-library").style.display = tab === "library" ? "" : "none";
+  document.getElementById("tab-content-tracker").style.display = tab === "tracker" ? "" : "none";
 
   if (tab === "library") {
     loadLibrary();
+  } else if (tab === "tracker") {
+    loadTrackedPlaylists();
   }
 }
 
@@ -879,6 +905,166 @@ window.toggleTrackDropdown = function(i) {
   dd.style.display = open ? "none" : "";
   if (arrow) arrow.style.transform = open ? "" : "rotate(180deg)";
 };
+
+// ═══════ TRACKER ═══════
+let trackedPlaylists = [];
+
+async function loadTrackedPlaylists() {
+  try {
+    trackedPlaylists = await api("/api/tracker") || [];
+    renderTrackedPlaylists();
+  } catch (e) { addLog(`Failed to load tracked playlists: ${e.message}`); }
+}
+
+function renderTrackedPlaylists() {
+  const el = document.getElementById("tracker-list");
+  if (trackedPlaylists.length === 0) {
+    el.innerHTML = `
+      <div style="text-align:center;padding:44px 24px;background:rgba(255,255,255,0.02);border-radius:16px;border:1px dashed rgba(255,255,255,0.08)">
+        <div style="font-size:32px;margin-bottom:10px">📋</div>
+        <div style="font-size:15px;font-weight:600;color:rgba(255,255,255,0.5);margin-bottom:6px">No tracked playlists</div>
+        <div style="font-size:13px;color:rgba(255,255,255,0.3);max-width:340px;margin:0 auto">
+          Paste a Spotify playlist URL above to start tracking. All songs will be copied to a new playlist you own, and new songs will be added automatically.
+        </div>
+      </div>`;
+    return;
+  }
+
+  el.innerHTML = trackedPlaylists.map(tp => {
+    const lastChecked = tp.last_checked_at ? new Date(tp.last_checked_at * 1000).toLocaleString() : "Never";
+    const lastChange = tp.last_change_at ? new Date(tp.last_change_at * 1000).toLocaleString() : "N/A";
+    const img = tp.source_playlist_image || "";
+    return `
+    <div style="background:${tp.enabled ? 'rgba(29,185,84,0.04)' : 'rgba(255,255,255,0.02)'};border:1px solid ${tp.enabled ? 'rgba(29,185,84,0.15)' : 'rgba(255,255,255,0.06)'};border-radius:14px;padding:16px;margin-bottom:10px;opacity:${tp.enabled ? 1 : 0.5};transition:all 0.3s">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <div onclick="toggleTracked('${tp.id}')" style="width:38px;height:20px;border-radius:10px;background:${tp.enabled ? '#1DB954' : 'rgba(255,255,255,0.15)'};cursor:pointer;position:relative">
+            <div style="width:16px;height:16px;border-radius:50%;background:#fff;position:absolute;top:2px;left:${tp.enabled ? '20' : '2'}px;transition:left 0.2s;box-shadow:0 1px 3px rgba(0,0,0,0.3)"></div>
+          </div>
+          <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:${tp.enabled ? '#1DB954' : 'rgba(255,255,255,0.3)'}">
+            ${tp.enabled ? 'Tracking' : 'Paused'}
+          </span>
+        </div>
+        <div style="display:flex;gap:6px">
+          <button onclick="checkTrackedNow('${tp.id}')" title="Check now" style="background:none;border:none;color:rgba(255,255,255,0.3);font-size:15px;cursor:pointer">🔄</button>
+          <button onclick="deleteTracked('${tp.id}')" style="background:none;border:none;color:rgba(255,255,255,0.2);font-size:15px;cursor:pointer">🗑</button>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">
+        ${img ? `<img src="${img}" style="width:48px;height:48px;border-radius:8px">` : ""}
+        <div style="flex:1;min-width:0">
+          <div style="font-size:11px;color:rgba(255,255,255,0.3);font-weight:700;text-transform:uppercase;letter-spacing:0.06em">Source</div>
+          <div style="font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(tp.source_playlist_name || "Unknown")}</div>
+        </div>
+      </div>
+      <div style="margin-left:18px;border-left:2px solid rgba(29,185,84,0.2);padding-left:14px;margin-bottom:8px">
+        <div style="font-size:11px;color:rgba(255,255,255,0.3);font-weight:700;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:2px">Archive playlist</div>
+        <div style="font-size:13px;color:rgba(255,255,255,0.7);font-weight:500">${esc(tp.dest_playlist_name || "Unknown")}</div>
+      </div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:10px">
+        <div style="font-size:11px;color:rgba(255,255,255,0.3)">Tracks added: <span style="color:rgba(255,255,255,0.6);font-weight:600">${tp.tracks_added || 0}</span></div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.3)">Last checked: <span style="color:rgba(255,255,255,0.5)">${lastChecked}</span></div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.3)">Last change: <span style="color:rgba(255,255,255,0.5)">${lastChange}</span></div>
+      </div>
+      <div style="margin-top:8px">
+        <button onclick="toggleTrackedTracks('${tp.id}')" style="background:none;border:none;color:rgba(29,185,84,0.7);font-size:12px;cursor:pointer;font-family:inherit;font-weight:600;padding:0">Show tracked songs</button>
+        <div id="tracked-tracks-${tp.id}" style="display:none;margin-top:8px;max-height:300px;overflow-y:auto"></div>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+async function addTrackedPlaylist() {
+  const input = document.getElementById("tracker-url");
+  const errEl = document.getElementById("tracker-error");
+  const url = input.value.trim();
+  errEl.style.display = "none";
+
+  if (!url) return;
+  if (!url.match(/playlist\/[a-zA-Z0-9]+/)) {
+    errEl.textContent = "Please paste a valid Spotify playlist URL";
+    errEl.style.display = "";
+    return;
+  }
+
+  const btn = document.getElementById("tracker-add-btn");
+  btn.textContent = "Adding...";
+  btn.disabled = true;
+
+  try {
+    const tp = await api("/api/tracker", {
+      method: "POST",
+      body: JSON.stringify({ playlist_url: url }),
+    });
+    trackedPlaylists.unshift(tp);
+    renderTrackedPlaylists();
+    input.value = "";
+    addLog(`Tracking: "${esc(tp.source_playlist_name)}" → "${esc(tp.dest_playlist_name)}"`);
+  } catch (e) {
+    errEl.textContent = e.message || "Failed to add playlist";
+    errEl.style.display = "";
+  } finally {
+    btn.textContent = "+ Track";
+    btn.disabled = false;
+  }
+}
+
+async function toggleTracked(id) {
+  try {
+    const result = await api(`/api/tracker/${id}/toggle`, { method: "PATCH" });
+    const tp = trackedPlaylists.find(t => t.id === id);
+    if (tp) tp.enabled = result.enabled;
+    renderTrackedPlaylists();
+  } catch (e) { addLog(`Toggle failed: ${e.message}`); }
+}
+
+async function deleteTracked(id) {
+  try {
+    await api(`/api/tracker/${id}`, { method: "DELETE" });
+    trackedPlaylists = trackedPlaylists.filter(t => t.id !== id);
+    renderTrackedPlaylists();
+    addLog("Tracked playlist removed");
+  } catch (e) { addLog(`Delete failed: ${e.message}`); }
+}
+
+async function checkTrackedNow(id) {
+  try {
+    const updated = await api(`/api/tracker/${id}/check`, { method: "POST" });
+    const idx = trackedPlaylists.findIndex(t => t.id === id);
+    if (idx >= 0) trackedPlaylists[idx] = updated;
+    renderTrackedPlaylists();
+    addLog("Playlist check complete");
+  } catch (e) { addLog(`Check failed: ${e.message}`); }
+}
+
+async function toggleTrackedTracks(id) {
+  const el = document.getElementById(`tracked-tracks-${id}`);
+  if (!el) return;
+  if (el.style.display !== "none") {
+    el.style.display = "none";
+    return;
+  }
+  el.style.display = "";
+  el.innerHTML = '<div style="padding:8px;color:rgba(255,255,255,0.3);font-size:12px">Loading...</div>';
+  try {
+    const tracks = await api(`/api/tracker/${id}/tracks`);
+    if (!tracks?.length) {
+      el.innerHTML = '<div style="padding:8px;color:rgba(255,255,255,0.3);font-size:12px">No tracks yet (initial sync may still be running)</div>';
+      return;
+    }
+    el.innerHTML = tracks.map(t => `
+      <div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.03)">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.track_name || "Unknown")}</div>
+          <div style="font-size:11px;color:rgba(255,255,255,0.3)">${esc(t.track_artist || "")}</div>
+        </div>
+        <div style="font-size:10px;color:rgba(255,255,255,0.2);flex-shrink:0">${new Date(t.added_at * 1000).toLocaleDateString()}</div>
+      </div>
+    `).join("");
+  } catch {
+    el.innerHTML = '<div style="padding:8px;color:#ff5050;font-size:12px">Failed to load tracks</div>';
+  }
+}
 
 // ═══════ GO ═══════
 init();
